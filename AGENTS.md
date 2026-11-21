@@ -145,3 +145,9 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - `runner.py`: Klausel vor den Zahlen, Fachregeln im Prompt, Policen-Beträge per Regex am Prompt-Ende, `shared_cap` + `apply_shared_caps` (anteilige Kürzung), `DEEP_VOTES` Default 3, `DISAGREE` per `.env`. `calibrate.py`: zensierte t/m-Schätzung, `--tier`. Neu `eval_cases.py` (Offline-Replay, gibt nichts ab, wartet außerhalb der Spielfenster, kostet Token).
 - Beleg und verworfene Regel: `notes/DECISIONS.md` Zeile 15:10. Tests: `test_runner.py` 6/6, Offline-Smoke-Test von `play_game` (dry, Fake-LLM).
 - Nächster Schritt: Philip `git pull`, in `.env` `DEEP_VOTES=3` setzen (oder Zeile löschen), Neustart zwischen zwei Spielfenstern, danach `calibrate.py --tier deep` beobachten.
+
+### 21.11.2026 15:25 · Claude · 404-Analyse bis Spiel 6
+
+- `notes/TEAM_404.md` um Spiele 4–6 ergänzt (Cache, keine neue Anfrage, kein Runner-Code). Rückstand 17.163: 98 % aus G1 Pos. 1 und G6 Pos. 1. In G6 forderte 404 743,99 (1,63 × Median, fair), wir 467,50 (m = 550, t ≥ 744).
+- Muster: 404 ist auf großen Zeilen öfter die höchste noch faire Forderung; unser m streut stark (t/m ≥ 1,35 bis < 0,85), Verzerrung ist nicht das Problem. A_MULT 0,85 lassen, neue Version ab Spiel 7/8 an der größten Zeile messen.
+- Nachtrag 15:30 [C]: `watch.py` (nur Leaderboard, kein LLM) läuft auf Michaels Mac im Terminal-Tab „Wächter“: Bericht je Spiel, macOS-Alarm bei fehlender Abgabe, Log `out/watch.log`. Eval-Summe korrigiert auf Zeilen mit Klammer (DECISIONS 15:10).
