@@ -58,7 +58,7 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 8 | Auswertung der ersten Runden (Leaderboard), Kalibrierung von a/b | [C] | in Arbeit | `calibrate.py` |
 | 9 | Write-up (1 Seite) und Pitch | – | offen | `writeup/` |
 | 10 | Runner modularisieren, Einstiegspunkte erhalten, offline verifizieren | [X] | fertig | `runner.py`, `claim_to_fame/`, `eval_cases.py`, `test_runner.py`, `tests/`, `README.md`, `.env.example` |
-| 11 | Michaels neue Commits mit lokalem Refactor zusammenführen, offline prüfen, nicht pushen | [X] | in Arbeit | `AGENTS.md`, `README.md`, Merge von `origin/main` |
+| 11 | Michaels neue Commits mit lokalem Refactor zusammenführen, offline prüfen, nicht pushen | [X] | fertig | `AGENTS.md`, `README.md`, Merge von `origin/main` |
 
 ## Offene Fragen
 
@@ -156,3 +156,16 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - `test_runner.py` startet die Suite unter `tests/`: 13 Tests, davon 12 bestanden und 1 mangels entschlüsselter Case-0-PDF übersprungen. Neue Prüfungen: Laufzeiteinstellungen, unvollständige/fehlgeschlagene LLM-Antworten, Tier-Reihenfolge und getrennte historische Imports (inkl. Fehlerfall).
 - Verifikation: `.venv/bin/python -B test_runner.py`, `git diff --check`; zusätzlich 2.000 Preis-, 500 Aggregations- und 500 Shared-Cap-Vergleiche identisch zu `6cd9340`, Prompt/Schema identisch und verbliebene Laufzeitfunktionen strukturell unverändert. Kein Live-Runner gestartet, keine API-/LLM-Aufrufe.
 - Änderungen werden nur lokal committet. Nächster Schritt: Michaels nächsten Push abrufen, Änderungen an verschobenen Blöcken in die jeweiligen Module integrieren, Offline-Suite erneut ausführen und dem User vor dessen Push zeigen. `calibrate.py` bleibt unverändert bei [C].
+
+### 21.11.2026 15:25 · Claude · 404-Analyse bis Spiel 6
+
+- `notes/TEAM_404.md` um Spiele 4–6 ergänzt (Cache, keine neue Anfrage, kein Runner-Code). Rückstand 17.163: 98 % aus G1 Pos. 1 und G6 Pos. 1. In G6 forderte 404 743,99 (1,63 × Median, fair), wir 467,50 (m = 550, t ≥ 744).
+- Muster: 404 ist auf großen Zeilen öfter die höchste noch faire Forderung; unser m streut stark (t/m ≥ 1,35 bis < 0,85), Verzerrung ist nicht das Problem. A_MULT 0,85 lassen, neue Version ab Spiel 7/8 an der größten Zeile messen.
+- Nachtrag 15:30 [C]: `watch.py` (nur Leaderboard, kein LLM) läuft auf Michaels Mac im Terminal-Tab „Wächter“: Bericht je Spiel, macOS-Alarm bei fehlender Abgabe, Log `out/watch.log`. Eval-Summe korrigiert auf Zeilen mit Klammer (DECISIONS 15:10).
+
+### 21.11.2026 15:28 · Codex · Divergierte Branches lokal zusammengeführt
+
+- Nach dem gemeldeten Pull-Fehler `origin/main` erneut abgerufen: `9fbd55e`, `f0ddea9` und der inzwischen eingetroffene `7221b47`. Merge erhält beide Historien und den modularen Refactor `94a449c`; kein Rebase und kein Push.
+- Nur Dokumentationskonflikte in `README.md` und `AGENTS.md`: Watcher-Erklärung, Modulübersicht und beide Übergaben erhalten. `watch.py` und `notes/DECISIONS.md` unverändert vom Remote übernommen. README ergänzt den expliziten Pull-Befehl `git pull --no-rebase`; keine globale Git-Konfiguration geändert.
+- Verifikation: `.venv/bin/python -B test_runner.py` — 12 bestanden, 1 mangels Case-0-PDF übersprungen; zusätzlicher Offline-Smoke-Test von `watch.report` mit synthetischen Transaktionen bestanden. Keine API-/LLM-Aufrufe, kein Runner oder Watcher gestartet.
+- Status: lokal integriert und getestet. Nächster Schritt: User prüft den Merge; Push bleibt ausdrücklich ausgesetzt.

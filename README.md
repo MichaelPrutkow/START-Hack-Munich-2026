@@ -38,8 +38,13 @@ uv run calibrate.py --team chineseModels
 uv run python test_runner.py
 ```
 ```bash
+uv run watch.py --team chineseModels
+```
+```bash
 uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3
 ```
+
+`watch.py` reports every finished game from the leaderboard (net, rank, our a against the t interval, no LLM) and raises a macOS alarm if we apparently did not submit.
 
 `eval_cases.py` replays the LLM step (Git `HEAD` vs current by default; select a baseline with `--old-ref <commit>`) on finished games and scores it against the leaderboard brackets; it submits nothing, waits outside game windows, but spends OpenAI tokens. Historical code is loaded with the domain modules from the same commit, so both single-file and modular revisions work. `calibrate.py` reads the public leaderboard once per finished game (1 request/s, cached in `out/leaderboard/`; organizers allowed scraping but not hammering), derives the t interval per line, and with `out/rounds.jsonl` fits t/m with a censored MLE (one-sided brackets included; `--tier fast|deep` picks whose estimate) and backtests `A_MULT` × `SIGMA`.
 
@@ -52,6 +57,7 @@ uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3
 | `claim_to_fame/prompts.py` | System prompt, structured response schema and policy amount extraction. Edit prompt wording here. |
 | `claim_to_fame/pricing.py` | Vote aggregation, pro-rata shared caps, rounding and the a/b rule. Parameters are explicit; the runner forwards its current settings. |
 | `calibrate.py` | Read-only leaderboard analysis and calibration. |
+| `watch.py` | Read-only per-game reports and missing-submission alarms. |
 | `eval_cases.py` | Historical/current LLM comparison on finished cases. |
 | `tests/` | Offline domain, round orchestration and historical-import regression tests. |
 | `test_runner.py` | Runs the entire offline suite using Python's standard-library `unittest`. |
@@ -61,3 +67,5 @@ Run `uv run python test_runner.py` after changes. The optional real-PDF test is 
 ## Integrating a teammate's next push
 
 Commit the local work first, then run `git fetch origin` and inspect `git log --oneline HEAD..origin/main` and `git diff HEAD...origin/main`. Merge the remote branch with `git merge origin/main`, resolve any conflicts, and rerun `uv run python test_runner.py`. Changes to previously extracted blocks in `runner.py` belong in the corresponding module above. Review the resulting diff before pushing. Update `AGENTS.md` with the integration status.
+
+For a one-step pull with the same merge strategy, use `git pull --no-rebase`. This keeps local and remote commits and avoids the divergent-branches preference prompt.
