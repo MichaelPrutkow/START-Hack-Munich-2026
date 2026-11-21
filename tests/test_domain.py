@@ -76,3 +76,25 @@ class DomainTests(unittest.TestCase):
               "2.6.8 End of life\nbelow 80 per cent of design capacity."
         got = R.policy_amounts(pol)
         assert len(got) == 2 and got[0].startswith("[2.3.3]") and got[1].startswith("[2.6.8]"), got
+
+
+class EscalationTests(unittest.TestCase):
+    def test_pick_largest_covered_lines(self):
+        from claim_to_fame.pricing import pick_escalation
+        raw = {1: (0.9, 100.0), 2: (0.2, 900.0), 3: (0.99, 500.0), 4: (0.8, 300.0)}
+        self.assertEqual(pick_escalation(raw, 2), [3, 4])
+        self.assertEqual(pick_escalation({1: (0.1, 50.0)}, 2), [])
+
+    def test_combine_adds_votes_only_for_picked_lines(self):
+        from claim_to_fame.pricing import combine_votes
+        deep = [{1: {"t": 1}, 2: {"t": 2}}]
+        extra = [{1: {"t": 10}, 2: {"t": 20}}]
+        got = combine_votes([1, 2], deep, extra, [2])
+        self.assertEqual(got, {1: [{"t": 1}], 2: [{"t": 2}, {"t": 20}]})
+
+    def test_escalation_prompt_keeps_cached_prefix(self):
+        from claim_to_fame.prompts import build_escalation
+        msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+        out = build_escalation(msgs, [3, 1])
+        self.assertEqual(out[:2], msgs)
+        self.assertIn("3, 1", out[-1]["content"])

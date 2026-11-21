@@ -68,3 +68,18 @@ def build_prompt(policy, desc, items):
            f"## CONCRETE AMOUNTS IN THE POLICY (extracted by code, check which lines they cap)\n{amounts}\n\n" \
            f"## INVOICE LINE ITEMS (index | description | quantity | unit)\n{lines}\n"
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+
+
+ESC_PROMPT = """SECOND LOOK. Lines {lines} carry most of the money in this claim. Re-assess ONLY
+these lines, slowly, in this order: (1) what exactly was done or supplied and in which quantity;
+(2) the realistic German market price of exactly that work today, gross; (3) every clause that
+changes the amount for this line: exclusions, proportional reductions, betterment, uneconomic
+repair, attendance rules, limits for the line alone (stated_cap) or shared with other lines
+(shared_cap, full limit, do not split it yourself); (4) any amount in the damage description that
+anchors the value. Then give the fields as before. Return entries ONLY for indices {lines}."""
+
+
+def build_escalation(messages, lines):
+    """Same conversation (cached prefix) plus one focused follow-up for the chosen lines."""
+    text = ESC_PROMPT.format(lines=", ".join(str(i) for i in lines))
+    return list(messages) + [{"role": "user", "content": text}]

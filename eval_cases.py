@@ -84,18 +84,74 @@ def verdict(a, lo, hi):
     return "fair" if a <= lo else "UNFAIR" if a >= hi else "?"
 
 
-def run(mod, msgs, items, fb, tier, shared):
-    t0 = time.time()
-    votes, usage = mod.assess(msgs, 55.0, tier)
-    dt = time.time() - t0
-    raw = {i: mod.aggregate([v[i] for v in votes if i in v]) for i in items if any(i in v for v in votes)}
+def price_lines(mod, by_line, fb, shared, disagree=None):
+    """{i: [votes]} -> {i: {p, m, m_raw, a, b, clauses}} with the module's own pricing."""
+    if disagree is None:
+        raw = {i: mod.aggregate(vs) for i, vs in by_line.items()}
+    else:
+        raw = {i: mod.pricing.aggregate(vs, disagree=disagree) for i, vs in by_line.items()}
     aggs = mod.apply_shared_caps(raw) if shared else raw
     out = {}
     for i, agg in aggs.items():
         a, b = mod.price(*agg[:4], fb[i])
         out[i] = {"p": agg[0], "m": agg[1], "m_raw": raw[i][1], "a": a, "b": b,
-                  "clauses": [v[i].get("clause", "") for v in votes if i in v][:1]}
-    return out, dt, usage, len(votes)
+                  "clauses": [v.get("clause", "") for v in by_line[i]][:1]}
+    return out
+
+
+def run(mod, msgs, items, fb, tier, shared):
+    t0 = time.time()
+    votes, usage = mod.assess(msgs, 55.0, tier)
+    dt = time.time() - t0
+    by_line = {i: [v[i] for v in votes if i in v] for i in items if any(i in v for v in votes)}
+    return price_lines(mod, by_line, fb, shared), dt, usage, len(votes), votes
+
+
+def informative(d):
+    """Lines whose bracket says something about t (the backtest scores open lines as 0.5 fair)."""
+    return d["t"][0] > 0 or math.isfinite(d["t"][1])
+
+
+def net_of(out, L, team):
+    return sum(C.backtest(L[i], team, x["m"], x["p"], R.A_MULT, R.SIGMA)
+               for i, x in out.items() if i in L and informative(L[i]))
+
+
+def escalation_variants(gid, L, items, fb, msgs, votes, deep_out, args, games):
+    """Paired test on the SAME deep votes: second look at the top lines, priced three ways."""
+    tier = R.build_esc_tier() or R.Tier("esc", 3, "gpt-6.2-astra", "high", 3, 0.0)
+    raw = {i: (x["p"], x["m_raw"]) for i, x in deep_out.items()}
+    picked = R.pick_escalation(raw, getattr(tier, "lines", 2))
+    if not picked:
+        print(f"G{gid} esc: no covered line")
+        return []
+    wait_outside_windows(games)
+    t0 = time.time()
+    try:
+        evotes, usage = R.assess(R.build_escalation(msgs, picked), 55.0, tier)
+    except Exception as e:
+        print(f"G{gid} esc: {type(e).__name__} {e}")
+        return []
+    dt = time.time() - t0
+    rows = []
+    for label, extra, dis in (("esc-median", evotes, 99.0), ("esc-lean", evotes, R.DISAGREE)):
+        by_line = R.combine_votes(items, votes, extra, picked)
+        out = price_lines(R, by_line, fb, True, dis)
+        rows.append({"game": gid, "tier": "deep", "prompt": label, "votes": len(votes) + len(extra),
+                     "secs": round(dt, 1), "usage": usage, "net": round(net_of(out, L, args.team)), "lines": out})
+    only = {i: ([v[i] for v in evotes if i in v] if i in picked else [v[i] for v in votes if i in v]) for i in items}
+    out = price_lines(R, {i: vs for i, vs in only.items() if vs}, fb, True)
+    rows.append({"game": gid, "tier": "deep", "prompt": "esc-only", "votes": len(evotes), "secs": round(dt, 1),
+                 "usage": usage, "net": round(net_of(out, L, args.team)), "lines": out})
+    base = net_of(deep_out, L, args.team)
+    print(f"  esc on {picked}: {dt:.1f}s tokens {usage}  net deep {base:.0f} | " +
+          " | ".join(f"{r['prompt']} {r['net']}" for r in rows))
+    for i in picked:
+        lo, hi = L.get(i, {"t": [0, math.inf]})["t"]
+        ev = [round(R.pos(v[i].get("t_if_covered")) or 0) for v in evotes if i in v]
+        print(f"     #{i} t[{lo:.0f},{hi:.0f})  deep m {deep_out[i]['m']:.0f}  esc votes {ev}  "
+              + "  ".join(f"{r['prompt']} m {r['lines'][i]['m']:.0f}" for r in rows if i in r['lines']))
+    return rows
 
 
 def main():
@@ -106,6 +162,7 @@ def main():
     ap.add_argument("--old-ref", default="HEAD")
     ap.add_argument("--skip-old", action="store_true")
     ap.add_argument("--team", default="chineseModels")
+    ap.add_argument("--esc", action="store_true", help="after deep/new: second look at the top lines, paired")
     args = ap.parse_args()
     R.load_env()
     R.setup_logging()
@@ -131,14 +188,11 @@ def main():
                     tier.votes = args.deep_votes
                 wait_outside_windows(games)
                 try:
-                    out, dt, usage, nv = run(mod, msgs, items, fb, tier, shared)
+                    out, dt, usage, nv, votes = run(mod, msgs, items, fb, tier, shared)
                 except Exception as e:
                     print(f"G{gid} {tname} {label}: {type(e).__name__} {e}")
                     continue
-                net = 0.0
-                for i, x in out.items():
-                    if i in L:
-                        net += C.backtest(L[i], args.team, x["m"], x["p"], R.A_MULT, R.SIGMA)
+                net = net_of(out, L, args.team)
                 print(f"\nG{gid} {tname:<4} {label:<3} {nv} votes {dt:5.1f}s tokens {usage}  backtest net {net:9.0f}")
                 for i, x in sorted(out.items()):
                     lo, hi = L.get(i, {"t": [0, math.inf]})["t"]
@@ -148,6 +202,8 @@ def main():
                           f"  a {x['a']:8.2f} {verdict(x['a'], lo, hi):<6} b {x['b']:8.2f}  {clause}")
                 results.append({"game": gid, "tier": tname, "prompt": label, "votes": nv, "secs": round(dt, 1),
                                 "usage": usage, "net": round(net), "lines": out})
+                if args.esc and tname == "deep" and label == "new":
+                    results += escalation_variants(gid, L, items, fb, msgs, votes, out, args, games)
     EVAL.mkdir(parents=True, exist_ok=True)
     (EVAL / f"eval_{int(time.time())}.json").write_text(json.dumps(results, indent=1, default=str))
     print("\nsum backtest net by tier/prompt:")

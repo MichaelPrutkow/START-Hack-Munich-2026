@@ -156,7 +156,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--team", required=True, help="our team name as on the leaderboard")
     ap.add_argument("--rounds", default=str(Path(__file__).resolve().parent / "out" / "rounds.jsonl"))
-    ap.add_argument("--tier", default="auto", help="auto (deep, else fast) | fast | deep: whose m to evaluate")
+    ap.add_argument("--tier", default="auto", help="auto (the tier that won the round) | fast | deep | esc: whose m to evaluate")
     args = ap.parse_args()
     games = [g["id"] for g in get("games", completed_only="true", page_size=1000)["items"] if g["id"] != 0]
     ours = {}
@@ -171,7 +171,8 @@ def main():
         L = analyse(load_game(gid, args.team)["tx"])
         rec = ours.get(gid, {})
         E = rec.get("est") or {}
-        est = (E.get("deep") or E.get("fast") or {}) if args.tier == "auto" else (E.get(args.tier) or {})
+        est = (E.get(rec.get("winner")) or E.get("deep") or E.get("fast") or {}) if args.tier == "auto" \
+            else (E.get(args.tier) or {})
         print(f"\n== game {gid}: {len(L)} lines")
         for line, d in sorted(L.items()):
             lo, hi = d["t"]

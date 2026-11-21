@@ -83,3 +83,21 @@ def price(p, m, stated, cap, fallback, *, a_mult, sigma):
     if cap:
         a, b = min(a, cap), min(b, cap)
     return floor_c(a), ceil_c(b)
+
+
+def pick_escalation(raw, n, *, min_p=0.5):
+    """Lines worth a second look: covered (p > min_p), largest estimate first, at most n."""
+    cand = [i for i, a in raw.items() if a[0] > min_p and a[1] > 0]
+    return sorted(cand, key=lambda i: -raw[i][1])[:n]
+
+
+def combine_votes(items, voices, extra, picked):
+    """{index: [vote, ...]} with the extra votes added only for the picked lines."""
+    out = {}
+    for i in items:
+        vs = [v[i] for v in voices if i in v]
+        if i in picked:
+            vs += [v[i] for v in extra if i in v]
+        if vs:
+            out[i] = vs
+    return out

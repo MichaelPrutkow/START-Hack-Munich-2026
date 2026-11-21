@@ -14,7 +14,7 @@ from claim_to_fame import pricing
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.multiple(
-            R, POOL=None, TIERS=[], A_MULT=0.85, SIGMA=0.35, DISAGREE=1.5,
+            R, POOL=None, TIERS=[], ESC=None, A_MULT=0.85, SIGMA=0.35, DISAGREE=1.5,
         ))
         # Fail immediately if a test accidentally reaches a live endpoint.
         self.enterContext(patch("requests.sessions.Session.request", side_effect=AssertionError("network forbidden")))

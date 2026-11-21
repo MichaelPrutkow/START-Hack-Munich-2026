@@ -27,7 +27,7 @@ source .venv/bin/activate && python3 runner.py --check && caffeinate -i python3 
 
 ## Each round
 
-Key at T+0 → decrypt (7z/7zz, else pyzipper) → parse the invoice PDF (all pages, wrapped lines) → provisional rule-based submission → fast and deep LLM tiers in parallel (structured output: per line coverage probability p and fair total m) → final submission with echo check. Pricing per line: `a = A_MULT × m`; `b` such that `p · P(t ≥ b) = 2/3` (log-normal spread `SIGMA`), `b = 0` if `p ≤ 2/3`. OpenAI key cascade: 401/insufficient_quota disables a key, 429 only for the round. Without LLM the rule submission stands, never 0/0.
+Key at T+0 → decrypt (7z/7zz, else pyzipper) → parse the invoice PDF (all pages, wrapped lines) → provisional rule-based submission → fast and deep LLM tiers in parallel (structured output: per line coverage probability p and fair total m) → final submission with echo check → optional **escalation**, off by default (`ESC_LINES=0`; paired backtest on games 1–8 showed no gain): if at least `ESC_MIN_SECONDS` (18) remain, a second look at the `ESC_LINES` largest covered lines with `ESC_VOTES` (3) more deep votes (same cached prompt plus a focused follow-up); the pooled votes (median, no lean-high) are priced again and sent as a complete submission. Every line's votes, p, m, a, b and clause go to `out/runner.log` and `out/rounds.jsonl`; `uv run view_rounds.py` shows them. Pricing per line: `a = A_MULT × m`; `b` such that `p · P(t ≥ b) = 2/3` (log-normal spread `SIGMA`), `b = 0` if `p ≤ 2/3`. OpenAI key cascade: 401/insufficient_quota disables a key, 429 only for the round. Without LLM the rule submission stands, never 0/0.
 
 ## Analyse and test (read-only, safe on any machine)
 
@@ -44,7 +44,7 @@ uv run watch.py --team chineseModels
 uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3
 ```
 
-`watch.py` reports every finished game from the leaderboard (net, rank, our a against the t interval, no LLM) and raises a macOS alarm if we apparently did not submit.
+`uv run view_rounds.py [--game N | --last K] [--brief]` shows the model output per line. `watch.py` reports every finished game from the leaderboard (net, rank, our a against the t interval, no LLM) and raises a macOS alarm if we apparently did not submit.
 
 `eval_cases.py` replays the LLM step (Git `HEAD` vs current by default; select a baseline with `--old-ref <commit>`) on finished games and scores it against the leaderboard brackets; it submits nothing, waits outside game windows, but spends OpenAI tokens. Historical code is loaded with the domain modules from the same commit, so both single-file and modular revisions work. `calibrate.py` reads the public leaderboard once per finished game (1 request/s, cached in `out/leaderboard/`; organizers allowed scraping but not hammering), derives the t interval per line, and with `out/rounds.jsonl` fits t/m with a censored MLE (one-sided brackets included; `--tier fast|deep` picks whose estimate) and backtests `A_MULT` × `SIGMA`.
 
@@ -58,6 +58,7 @@ uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3
 | `claim_to_fame/pricing.py` | Vote aggregation, pro-rata shared caps, rounding and the a/b rule. Parameters are explicit; the runner forwards its current settings. |
 | `calibrate.py` | Read-only leaderboard analysis and calibration. |
 | `watch.py` | Read-only per-game reports and missing-submission alarms. |
+| `view_rounds.py` | Read-only view of `out/rounds.jsonl`: per line and tier the votes, p, m, a, b, clause and (if cached) the true t interval. |
 | `eval_cases.py` | Historical/current LLM comparison on finished cases. |
 | `tests/` | Offline domain, round orchestration and historical-import regression tests. |
 | `test_runner.py` | Runs the entire offline suite using Python's standard-library `unittest`. |

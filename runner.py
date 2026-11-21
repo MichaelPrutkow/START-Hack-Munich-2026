@@ -35,9 +35,9 @@ from claim_to_fame.invoices import (
     FALLBACK_LINE, FALLBACK_MAX, LINE_END_RE, LINE_RE, STOP_RE, UNIT_RATE, UNITS,
     header_map, norm_unit, num, parse_items, parse_lines, rule_value,
 )
-from claim_to_fame.pricing import apply_shared_caps, ceil_c, floor_c, pos
+from claim_to_fame.pricing import apply_shared_caps, ceil_c, combine_votes, floor_c, pick_escalation, pos
 from claim_to_fame.prompts import (
-    AMOUNT_RE, CLAUSE_RE, SCHEMA, SYSTEM, build_prompt, policy_amounts,
+    AMOUNT_RE, CLAUSE_RE, ESC_PROMPT, SCHEMA, SYSTEM, build_escalation, build_prompt, policy_amounts,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -273,6 +273,22 @@ def build_tiers():
 
 
 TIERS = []
+ESC = None                  # escalation tier: second look at the largest lines after deep
+
+
+def build_esc_tier():
+    """Runs after deep in the same round, only while ESC_MIN_SECONDS remain before the deadline.
+    Off by default (ESC_LINES=0): paired backtest on games 1-8 showed no gain (notes/DECISIONS.md).
+    Model defaults to the deep model (known latency)."""
+    env = os.environ.get
+    if int(env("ESC_LINES", "0")) <= 0:
+        return None
+    t = Tier("esc", 3, env("ESC_MODEL", env("DEEP_MODEL", "gpt-6.2-astra")),
+             env("ESC_REASONING", env("DEEP_REASONING", "high")), int(env("ESC_VOTES", "3")), 0.0)
+    t.lines, t.min_left = int(env("ESC_LINES")), float(env("ESC_MIN_SECONDS", "18"))
+    # deep + esc votes pooled: lean-high over 6 votes would ignore every lower second look
+    t.disagree = float(env("ESC_DISAGREE", "99"))
+    return t
 
 
 def llm_call(messages, n, tier, timeout=20.0):
@@ -391,30 +407,63 @@ def play_game(gid, start, dry=False, use_llm=True):
     best = {"level": 0, "ab": rules, "tier": "rules"}
     out, usage, slock, est = {"rules": rules}, {}, threading.Lock(), {}
 
+    def price_votes(name, by_line, disagree=None):
+        """{i: [votes]} -> {i: (a, b)}; records est and logs one line per item."""
+        dis = DISAGREE if disagree is None else disagree
+        raw = {i: pricing.aggregate(vs, disagree=dis) for i, vs in by_line.items()}
+        part = {}
+        for i, agg in apply_shared_caps(raw).items():
+            vs = by_line[i]
+            part[i] = price(*agg, fb[i])
+            clause = next((v.get("clause") for v in vs if v.get("clause")), "") or ""
+            est.setdefault(name, {})[i] = {
+                "p": round(agg[0], 3), "m": round(agg[1], 2), "m_raw": round(raw[i][1], 2), "stated": agg[2],
+                "cap": agg[3], "shared": raw[i][4], "a": part[i][0], "b": part[i][1],
+                "votes": [[round(float(v.get("covered_prob") or 0), 2), pos(v.get("t_if_covered"))] for v in vs],
+                "clause": clause[:300]}
+            log.info("[%s] %s #%s p %.2f m %.0f%s votes %s -> a %.2f b %.2f | %s", gid, name, i, agg[0], agg[1],
+                     "" if abs(agg[1] - raw[i][1]) < 0.01 else f" (raw {raw[i][1]:.0f})",
+                     "/".join(f"{x or 0:.0f}" for _, x in est[name][i]["votes"]), *part[i], clause[:120])
+        return raw, part
+
+    def send(tier, part):
+        out[tier.name] = part
+        with slock:                                 # ordered: a slower lower tier never overwrites
+            if tier.level < best["level"]:
+                log.info("[%s] %s done after %s: not sent", gid, tier.name, best["tier"])
+                return False
+            merged = {**best["ab"], **part}             # always a complete submission
+            if submit(gid, merged, deadline, dry, tier.name):
+                best.update(level=tier.level, ab=merged, tier=tier.name)
+                return True
+        return False
+
+    def run_escalation(voices, raw, msgs):
+        tier = ESC
+        left = deadline - time.time() - 3
+        picked = pick_escalation(raw, tier.lines)
+        if not picked or left < tier.min_left:
+            log.info("[%s] esc skipped: %s, %.1fs left", gid, "no covered line" if not picked else "too late", left)
+            return
+        deep = next((t for t in TIERS if t.name == "deep"), None)
+        if deep is not None and deep.model == tier.model:
+            tier.n_ok = deep.n_ok                   # learnt n support carries over
+        evoices, usage["esc"] = assess(build_escalation(msgs, picked), left, tier)
+        _, part = price_votes("esc", combine_votes(items, voices, evoices, picked), tier.disagree)
+        sent = send(tier, part)
+        log.info("[%s] esc (%s) lines %s: %d extra votes, %.1fs after key, %s, tokens %s", gid, tier.model,
+                 picked, len(evoices), time.time() - t_key, "sent" if sent else "NOT sent", usage["esc"])
+
     def run_tier(tier, msgs):
         try:
             budget = min(tier.budget - (time.time() - t_key), deadline - time.time() - 3)
             voices, usage[tier.name] = assess(msgs, budget, tier)
-            part, raw = {}, {}
-            for i in items:
-                votes = [v[i] for v in voices if i in v]
-                if votes:
-                    raw[i] = aggregate(votes)
-            for i, agg in apply_shared_caps(raw).items():
-                est.setdefault(tier.name, {})[i] = {"p": round(agg[0], 3), "m": round(agg[1], 2),
-                                                    "m_raw": round(raw[i][1], 2), "stated": agg[2],
-                                                    "cap": agg[3], "shared": raw[i][4]}
-                part[i] = price(*agg, fb[i])
-            out[tier.name] = part
-            with slock:                             # ordered: a slower lower tier never overwrites
-                if tier.level < best["level"]:
-                    log.info("[%s] %s done after %s: not sent", gid, tier.name, best["tier"])
-                    return
-                merged = {**best["ab"], **part}
-                if submit(gid, merged, deadline, dry, tier.name):
-                    best.update(level=tier.level, ab=merged, tier=tier.name)
+            raw, part = price_votes(tier.name, combine_votes(items, voices, [], ()))
+            send(tier, part)
             log.info("[%s] %s (%s): %d/%d lines, %.1fs after key, tokens %s", gid, tier.name, tier.model,
                      len(part), len(items), time.time() - t_key, usage[tier.name])
+            if tier.name == "deep" and ESC is not None:
+                run_escalation(voices, raw, msgs)
         except NoKeys:
             log.error("[%s] %s: all OpenAI keys exhausted", gid, tier.name)
         except Exception as e:
@@ -432,7 +481,7 @@ def play_game(gid, start, dry=False, use_llm=True):
     final = best["ab"]
     rec = {"game": gid, "lines": len(items), "winner": best["tier"], "ok": prov_ok or best["level"] > 0,
            "t_provisional": round(t_prov, 2), "t_end": round(time.time() - t_key, 2), "usage": usage,
-           "models": {t.name: t.model for t in TIERS}, "items": items, "tiers": out,
+           "models": {t.name: t.model for t in TIERS + ([ESC] if ESC else [])}, "items": items, "tiers": out,
            "est": est, "a_mult": A_MULT, "sigma": SIGMA}
     jlog("rounds.jsonl", rec)
     log.info("[%s] DONE winner %s, sum a %.0f", gid, best["tier"], sum(a for a, _ in final.values()))
@@ -444,6 +493,8 @@ def check():
     print("TEAM_API_KEY:", "set" if os.environ.get("TEAM_API_KEY") else "MISSING")
     print("OpenAI keys:", POOL.names or "NONE (rules only)")
     print("tiers:", [(t.name, t.model, t.extra.get("reasoning_effort"), t.votes) for t in TIERS])
+    print("escalation:", (ESC.model, ESC.extra.get("reasoning_effort"), ESC.votes, f"top {ESC.lines} lines",
+                          f"if >= {ESC.min_left:.0f}s left") if ESC else "off (ESC_LINES=0)")
     print("7z:", shutil.which("7z") or shutil.which("7zz") or "not found, using pyzipper")
     for k, n in enumerate(POOL.names):
         try:
@@ -503,7 +554,7 @@ def run_forever(dry, use_llm):
 
 
 def main():
-    global POOL, TIERS, A_MULT, SIGMA, DISAGREE
+    global POOL, TIERS, ESC, A_MULT, SIGMA, DISAGREE
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", type=int, help="play this game now (0 = test game)")
     ap.add_argument("--check", action="store_true")
@@ -514,6 +565,7 @@ def main():
     A_MULT, SIGMA = float(os.environ.get("A_MULT", A_MULT)), float(os.environ.get("SIGMA", SIGMA))
     DISAGREE = float(os.environ.get("DISAGREE", DISAGREE))
     TIERS = build_tiers()
+    ESC = build_esc_tier()
     POOL = KeyPool()
     setup_logging()
     if args.check:

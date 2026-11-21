@@ -176,3 +176,9 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Kaans Refactor ist reine Umstrukturierung: Die 22 verschobenen Definitionen sind per Syntaxbaum identisch mit `7221b47`, `price`/`b_mult`/`aggregate` nehmen A_MULT/SIGMA/DISAGREE jetzt als Parameter, der übrige `runner.py` ist unverändert. Preisregel steht jetzt in `claim_to_fame/pricing.py` (Abschnitt Live-Betrieb nennt noch `runner.py: price`, dort nur ein Wrapper).
 - Verifikation: Alt und neu liefern auf den Fällen 0–5 und 7 dieselben Positionen und denselben Prompt (7/7); 60.000 zufällige Preis-, Aggregations- und Shared-Cap-Eingaben ohne Abweichung; `test_runner.py` 13/13 inkl. echtem Case-0-PDF; `runner.py --check` ok. Kein LLM-Backtest (gleicher Code, nur Token).
 - Michaels `main` per `git pull --ff-only` auf `10ad63b`. Philip: `git pull --ff-only` jederzeit, Neustart nicht nötig. Nebenbefund: `--check` auf Michaels Mac zeigte Timeout bei OPENAI_KEY_1/_2, Key 3 ok; Ursache unklar, auf Philips Mac prüfen.
+
+### 21.11.2026 15:56 · Claude · Modell-Output sichtbar, Eskalation getestet (Branch `escalation`, nicht gepusht)
+
+- `runner.py`: je Position eine Logzeile (Stimmen, p, m, a, b, Klausel), dieselben Daten in `rounds.jsonl` (`est.<tier>.votes`, `clause`, `a`, `b`). Neu `view_rounds.py` (liest `rounds.jsonl`, zeigt t-Spanne aus dem Leaderboard-Cache). Eskalationsstufe `esc` (zweiter Blick auf die größten gedeckten Zeilen nach deep, nur vollständige Abgaben) eingebaut, aber **Default aus**: gepaarter Backtest ohne Gewinn (DECISIONS 15:55).
+- Module: `prompts.build_escalation`, `pricing.pick_escalation`, `pricing.combine_votes`; `eval_cases.py --esc` (gepaart), Backtest nur auf Zeilen mit Klammer. Tests 16/16 (`tests/test_runtime.py` setzt `ESC=None` zur Isolation).
+- Nächster Schritt: Michaels OK zum Push; danach Philip `git pull` + Neustart zwischen zwei Spielen. Danach Recall aus eigenen Klammern.
