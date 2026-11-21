@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import watch
+import learn
 from claim_to_fame import feedback
 from tests.test_feedback import fixture
 
@@ -37,3 +38,25 @@ class WatchLearningTests(unittest.TestCase):
             target.write_text("existing artifact")
             watch.update_learning("us", root / "absent.jsonl", target)
             self.assertEqual(target.read_text(), "existing artifact")
+
+    def test_empty_rebuild_preserves_previous_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rounds = root / "rounds.jsonl"
+            rounds.write_text("")
+            target = root / "learning.json"
+            target.write_text("previous artifact")
+            result, state = learn.rebuild_cached("us", rounds, root / "leaderboard", target)
+            self.assertEqual(result["status"], "preserved")
+            self.assertEqual(target.read_text(), "previous artifact")
+
+    def test_cached_rebuild_respects_automatic_refresh_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rounds = root / "rounds.jsonl"
+            rounds.write_text("")
+            cache = root / "leaderboard"
+            with watch.C.cache_lock(cache / ".learning-refresh.lock"):
+                result, state = learn.rebuild_cached("us", rounds, cache, root / "learning.json")
+            self.assertEqual(result["status"], "busy")
+            self.assertIsNone(state)

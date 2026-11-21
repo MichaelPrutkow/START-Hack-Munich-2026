@@ -68,6 +68,12 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 
 | 16 | Merge mit Michaels optionaler max-Stufe und Preistabellen; offline prüfen und pushen | [X] | fertig | `runner.py`, `tests/test_merge_tiers.py`, `AGENTS.md` |
 
+
+| 17 | Briefing-Abgleich und Parameterlernen vervollständigen | [X/params] | fertig | `claim_to_fame/feedback.py`, `tests/test_feedback.py` |
+| 18 | Leaderboard-Import zuverlässig, atomar und fristgerecht machen | [X/data] | fertig | `calibrate.py`, `claim_to_fame/learning_service.py`, `tests/test_learning_service.py` |
+| 19 | Automatische Lernanbindung, Diagnose, Dokumentation und Integration | [X] | in Arbeit (Michaels Push integrieren) | `runner.py`, `learn.py`, `watch.py`, `tests/`, `README.md`, `.env.example`, `notes/BRIEFING_ALIGNMENT.md`, `writeup/`, `AGENTS.md` |
+| 20 | Eindeutige alte Abgaben wiederverwenden | [X/pricing] | fertig | `claim_to_fame/legacy.py`, `tests/test_legacy.py` |
+
 ## Offene Fragen
 
 - [x] Welche Challenge? → QuantCo. [U]
@@ -202,3 +208,11 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Fokus hat Priorität 2,5 zwischen deep (2) und max (3), damit gleich konsistente Ergebnisse nicht abhängig von der Ankunftsreihenfolge die max-Stufe verdrängen. KeyPool/API-Key-Nutzung unverändert.
 - Neue Offline-Regressionen prüfen max-Konfiguration, beide Ankunftsreihenfolgen, verspätete max-Antworten und Preistabellen. Kein Live-Runner, keine Spielabgabe oder LLM-Anfrage.
 - Abschlussprüfung: 77 Offline-Tests, davon 76 bestanden und 1 mangels Case-0-PDF übersprungen; `git diff --check` sauber. `build_tiers`, `log_prices`, `KeyPool`, `llm_call` und `assess` per AST gegen Michaels `18e51e3` unverändert. Merge wird mit ausdrücklicher User-Freigabe auf `main` gepusht.
+
+### 21.11.2026 · Codex · Briefing-Lücken und automatische Lernschleife
+
+- Nutzer beauftragt Briefing-Abgleich, Parameterverbesserung und Leaderboard-Nutzung; bestehende Push-Freigabe gilt. Implementierung im isolierten Klon, kein Live-Runner/API-/LLM-Aufruf. Audit mit Quellen-/Seitenangaben: `notes/BRIEFING_ALIGNMENT.md`. Interne August-Auszahlungsregeln nicht übernehmen.
+- Ein Lern-Worker im geplanten Runner liest zwischen Runden vollständige veröffentlichte Transaktionen. Fristprüfungen, wiederaufnehmbare private Seiten-Caches, Prozesslocks und atomare Artefakte; Abgleich gegen öffentliche Matrix-Nettozellen, widersprüchliche Spiele ausgeschlossen. Kein separater Watcher erforderlich; `learn.py --status` zeigt Diagnose.
+- Bias/σ und Forderungsmultiplikator lernen, neue Parameter nur nach chronologischem konservativem Holdout. Identität je Schätzer statt gesamter Runner-Datei; bereits kalibrierte Zeilen über rohe m plus angewandte Parameter erneut nutzbar. Vorgänger nur mit eigenem Nachweis ersetzen; gleiche Daten verlängern keine Validierungsfrist. Schema v2; keine erfundenen Identitäten für alte Logs.
+- 123 Offline-Tests: 122 bestanden, eine Case-0-PDF-Prüfung mangels Datei übersprungen. API-/Key-/Modellfunktionen und `log_prices` per AST gegen `e9f4442` unverändert. Keine Produktions-Gewinnbehauptung.
+- Während des Abschlusses kam Michaels `67d41f2` mit eigenem Auto-Tuning und `view_rounds.py`. Nutzer fordert ausdrücklich Abruf/Integration. Diese ist der nächste Schritt; zwei unabhängige Parameter-Automatiken werden zusammengeführt.

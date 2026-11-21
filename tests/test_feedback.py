@@ -206,13 +206,187 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(len(state["calibrations"]), 6)
         self.assertTrue(all(c["status"] == "shadow" for c in state["calibrations"]))
 
-    def test_already_applied_calibration_or_uncertainty_is_not_refitted(self):
+    def test_missing_applied_parameters_or_uncertainty_is_not_refitted(self):
         for key in ("calibration_applied", "uncertainty_applied"):
             rec, data = fixture()
             rec["est"]["fast"]["1"][key] = True
             self.rounds.unlink(missing_ok=True)
             self.add(rec, data)
             self.assertEqual(self.state()["calibrations"], [])
+
+    def test_charge_multiplier_selected_on_training_only(self):
+        for gid in range(1, 7):
+            self.add(*fixture(gid, lines=4, low=110, high=120, true_t=115))
+        good = self.state()["calibrations"][0]
+        self.assertNotEqual(good["a_mult"], 0.85)
+        self.assertIn(good["a_mult"], F.A_MULT_GRID)
+        self.assertEqual(good["status"], "validated")
+        selected = next(s for s in good["training_scores"] if s["a_mult"] == good["a_mult"])
+        self.assertEqual(selected["lower"], max(s["lower"] for s in good["training_scores"]))
+        # Change ONLY holdout settlements. Proposed parameters cannot change.
+        for gid in (5, 6):
+            _, data = fixture(gid, lines=4, low=85, high=120, true_t=85)
+            (self.cache / f"game_{gid:03d}.json").write_text(json.dumps(data))
+        bad = self.state()["calibrations"][0]
+        self.assertEqual(bad["proposed_parameters"], good["proposed_parameters"])
+        self.assertEqual(bad["training_scores"], good["training_scores"])
+        self.assertEqual(bad["status"], "shadow")
+        self.assertIsNone(bad["active_parameters"])
+
+    def test_calibrated_rows_relearn_raw_predictions_without_compounding(self):
+        params = {"a_mult": 0.9, "bias": 1.1, "sigma": 0.4}
+        own = [F.floor_c(100 * params["bias"] * params["a_mult"]),
+               F.ceil_c(C.rule_b(1, 100 * params["bias"], params["sigma"]))]
+        for gid in range(1, 7):
+            rec, data = fixture(gid, lines=4, own=own, low=110, high=120, true_t=115)
+            for est in rec["est"]["fast"].values():
+                est.update(m_raw=100, m=110, calibration_applied=True, **params)
+            self.add(rec, data)
+        state = self.state()
+        self.assertEqual(state["learning_counts"]["eligible"], 24)
+        self.assertEqual(state["learning_counts"]["calibrated_observations"], 24)
+        candidate = state["calibrations"][0]
+        self.assertEqual(candidate["calibrated_observation_count"], 24)
+        self.assertGreater(candidate["bias"], 1)  # Fitted against raw100, not adjusted110.
+        self.assertLess(candidate["bias"], 1.1)  # Previous1.1 is not compounded into newbias.
+        observation, reason = F._training_observation(rec, "fast", rec["est"]["fast"]["1"], own)
+        self.assertIsNone(reason)
+        self.assertEqual(observation["m"], 100)
+        self.assertEqual(observation["applied_parameters"], params)
+        self.assertEqual(state["training_exclusions"], [])
+
+    def test_mislogged_calibrated_prices_are_reported_but_not_trained(self):
+        rec, data = fixture()
+        rec["est"]["fast"]["1"].update(m_raw=100, calibration_applied=True, a_mult=0.9, bias=1.1, sigma=0.4)
+        self.add(rec, data)
+        state = self.state()
+        self.assertEqual(state["games"], [1])
+        self.assertEqual(state["calibrations"], [])
+        self.assertEqual(state["training_exclusions"][0]["reason"], "logged_parameters_do_not_reproduce_submission")
+
+    def test_validated_incumbent_survives_new_rounds_without_beating_itself(self):
+        for gid in range(1, 7):
+            self.add(*fixture(gid, lines=4, low=110, high=120, true_t=115))
+        previous = self.state()
+        old = previous["calibrations"][0]
+        params = old["active_parameters"]
+        own = [F.floor_c(100 * params["bias"] * params["a_mult"]),
+               F.ceil_c(C.rule_b(1, 100 * params["bias"], params["sigma"]))]
+        for gid in (7, 8):
+            rec, data = fixture(gid, lines=4, own=own, low=110, high=120, true_t=115)
+            for est in rec["est"]["fast"].values():
+                est.update(m_raw=100, calibration_applied=True, **params)
+            self.add(rec, data)
+        state = self.state(previous_state=previous)
+        kept = state["calibrations"][0]
+        self.assertEqual(kept["activation"], "retained")
+        self.assertEqual(kept["active_parameters"], params)
+        self.assertEqual(kept["validated_at"], old["validated_at"])
+        self.assertEqual(kept["latest_proposal"]["sample_count"], 32)
+        self.assertEqual(kept["monitoring"]["calibrated_observations"], 8)
+        self.assertEqual(kept["latest_proposal"]["status"], "shadow")
+        path = self.root / "retained.json"
+        F.write_state(state, path)
+        self.assertIsNotNone(F.load_state(path, 9, now=NOW))
+        stale = F.build_state(self.rounds, self.cache, "us", now=NOW + dt.timedelta(hours=37), previous_state=previous)
+        self.assertNotEqual(stale["calibrations"][0]["activation"], "retained")
+
+    def test_schema_one_and_tampered_controls_fail_closed(self):
+        for gid in range(1, 7):
+            self.add(*fixture(gid, lines=4, low=110, high=120, true_t=115))
+        original = self.state()
+        path = self.root / "state.json"
+        for change in ("schema", "algorithm", "threshold", "active", "alpha", "counts"):
+            state = copy.deepcopy(original)
+            if change == "schema":
+                state["schema_version"] = 1
+                self.assertIsNone(F.calibration_for(state, "fast", model="model-a", prompt_hash="prompt-a", config_hash="config-a"))
+            elif change == "algorithm":
+                state["algorithm"] = "old"
+            elif change == "threshold":
+                state["controls"]["minimum_gain"] = 0
+            elif change == "active":
+                state["calibrations"][0]["active_parameters"]["a_mult"] = 0.5
+            elif change == "alpha":
+                state["calibrations"][0].pop("a_mult")
+            else:
+                state["calibrations"][0]["fit_count"] = 0
+            path.write_text(json.dumps(state))
+            self.assertIsNone(F.load_state(path, 7, now=NOW), change)
+
+    def test_rebuilding_identical_evidence_cannot_refresh_validation(self):
+        for gid in range(1, 7):
+            self.add(*fixture(gid, lines=4, low=110, high=120, true_t=115))
+        original = self.state()
+        rebuilt = F.build_state(self.rounds, self.cache, "us", now=NOW + dt.timedelta(hours=1),
+                                previous_state=original)
+        self.assertEqual(rebuilt["calibrations"][0]["validated_at"], original["calibrations"][0]["validated_at"])
+        expired = F.build_state(self.rounds, self.cache, "us", now=NOW + dt.timedelta(hours=37),
+                                previous_state=rebuilt)
+        again = F.build_state(self.rounds, self.cache, "us", now=NOW + dt.timedelta(hours=38),
+                              previous_state=expired)
+        for state in (expired, again):
+            candidate = state["calibrations"][0]
+            self.assertEqual(candidate["status"], "shadow")
+            self.assertEqual(candidate["reason_code"], "validation_expired_no_new_evidence")
+
+    def test_replacement_must_beat_incumbent_on_same_holdout(self):
+        for gid in range(1, 7):
+            self.add(*fixture(gid, lines=4, low=110, high=120, true_t=115))
+        original = self.state()
+        proposal = copy.deepcopy(original["calibrations"][0])
+        proposal["a_mult"] = 0.65 if proposal["a_mult"] != 0.65 else 1.05
+        proposal["proposed_parameters"]["a_mult"] = proposal["a_mult"]
+        proposal["active_parameters"]["a_mult"] = proposal["a_mult"]
+        proposal["evidence_hash"] = "new-evidence"
+        rows = [{"game": 5, "baseline_alpha": .85, "baseline_sigma": .35, "calibration_applied": True}]
+        upper = proposal["holdout_candidate"]["lower"] + 100
+        with patch.object(F, "_score_rows", return_value=(upper, upper)):
+            result = F._retain_candidate(proposal, rows, original, "us", NOW)
+        self.assertEqual(result["active_parameters"], original["calibrations"][0]["active_parameters"])
+        self.assertEqual(result["latest_proposal"]["reason_code"], "no_gain_over_incumbent")
+
+    def test_per_tier_identity_maps_and_mismatch_diagnostics(self):
+        for gid in range(1, 7):
+            rec, data = fixture(gid, lines=4, low=110, high=120, true_t=115)
+            rec["prompt_hash"] = {"fast": "stable-prompt", "deep": f"other-prompt-{gid}"}
+            rec["config_hash"] = {"fast": "stable-config", "deep": f"other-config-{gid}"}
+            self.add(rec, data)
+        state = self.state()
+        self.assertEqual(len(state["calibrations"]), 1)
+        active = F.calibration_status(state, "fast", model="model-a", prompt_hash="stable-prompt", config_hash="stable-config")
+        self.assertEqual(active["status"], "active")
+        self.assertIn("a_mult", active["parameters"])
+        mismatch = F.calibration_status(state, "fast", model="model-a", prompt_hash="stable-prompt", config_hash="changed-config")
+        self.assertEqual(mismatch["reason_code"], "identity_mismatch")
+        self.assertEqual(mismatch["available"][0]["mismatched_fields"], ["config_hash"])
+        missing = F.calibration_status(state, "deep", model="model-b", prompt_hash="x", config_hash="y")
+        self.assertEqual(missing["reason_code"], "no_eligible_observations")
+
+    def test_legacy_complete_winner_has_reporting_and_memory_without_fabricated_identity(self):
+        rec, data = fixture()
+        rec["winner"] = "fast"
+        rec["tiers"] = {"fast": rec.pop("final_ab")}
+        rec.pop("line_sources")
+        rec.pop("prompt_hash")
+        rec.pop("config_hash")
+        self.add(rec, data)
+        state = self.state()
+        self.assertEqual(state["games"], [1])
+        self.assertEqual(state["learning_counts"]["recovered_legacy_games"], 1)
+        self.assertEqual(len(state["memory"]), 1)
+        self.assertEqual(state["calibrations"], [])
+        self.assertEqual(state["training_exclusions"][0]["reason"], "missing_model_prompt_or_config_identity")
+        self.assertIn("legacy prices recovered", F.render_report(state))
+
+    def test_field_behavior_does_not_label_zero_prices_or_unknown_as_fraud(self):
+        self.add(*fixture())
+        behavior = self.state()["field_behavior"]
+        self.assertEqual(sum(behavior["claims"].values()), 3)  # Excludes the fourth issuer's0/0.
+        self.assertEqual(behavior["claims"], {"fair": 2, "unfair": 1, "unknown": 0})
+        self.assertEqual(behavior["unfair_accepted_rate"], 0.5)
+        self.assertEqual(behavior["unfair_decision_count"], 2)
+        self.assertEqual(behavior["fair_decision_count"], 5)
 
     def test_one_sided_totals_stay_unbounded(self):
         rec, data = fixture()

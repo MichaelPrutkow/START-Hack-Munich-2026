@@ -54,13 +54,17 @@ uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3 --old-re
 
 ## Learning between rounds
 
-On **Philip's runner machine**, open a second terminal for the watcher (it does not submit):
+The scheduled runner now starts one background learner automatically (`LEARNING_AUTO=1`, `TEAM_NAME=chineseModels`). It uses only public leaderboard GETs and local round logs, with no model calls. It pauses before the next game window, retries delayed publication, and resumes partially downloaded pages. Dry runs, one-off games and `--check` do not start the learner. **Only Philip's Mac runs the submitting runner.**
+
+Completed settlements are checked for full pagination and ordered team pairs, then compared with public per-game matrix results wherever those cells are available (two-cent tolerance). Mismatches are quarantined; unavailable matrix cells are explicitly marked. The learner atomically publishes `out/learning.json`, `out/learning-report.md` and refresh diagnostics in `out/learning-status.json`. The runner reads the artifact at the next game. Network failures or an incomplete rebuild retain the prior artifact.
+
+Inspect active/shadow parameters and why promotion is blocked, without network or LLM requests:
 
 ```bash
-uv run watch.py --team chineseModels --learn
+uv run learn.py --status
 ```
 
-After reporting a completed game, it joins public settlements with local `out/rounds.jsonl`, atomically writes `out/learning.json`, and produces `out/learning-report.md`. The runner reads this artifact at the next game. A watcher on another machine can still monitor, but needs Philip's round logs to build learning.
+The optional watcher still supplies alerts (`uv run watch.py --team chineseModels`). Its `--learn` flag rebuilds from cached data under the same process lock; it is no longer required for automatic learning. A watcher on another machine needs Philip's round logs to learn from our estimates.
 
 Rebuild from cached data without network or LLM requests:
 
@@ -68,17 +72,21 @@ Rebuild from cached data without network or LLM requests:
 uv run learn.py --team chineseModels
 ```
 
-`--refresh` explicitly fetches missing completed public games. `--before-game N` excludes game N and later data. The report separates reviewer overpayment, wrongful-rejection penalties and bounded issuer opportunity losses, grouped by round and actual source tier.
+`--refresh` explicitly fetches missing completed public games represented in the local logs, using the same bounded refresh and cache locks. `--before-game N` excludes game N and later data. The report separates reviewer overpayment, wrongful-rejection penalties and bounded issuer opportunity losses, grouped by round and actual source tier. It also shows opponents' acceptance of known-unfair positive claims and rejection of known-fair claims; unknown fairness remains separate.
 
-Calibration stays in shadow until there are at least six games, sixteen confirmed-covered training lines and eight later validation lines. Validation includes all otherwise eligible high-coverage predictions, including coverage mistakes. A frozen candidate must improve the held-out conservative net lower bound by at least 5% over actual baseline net. Only matching model/prompt/configuration cohorts qualify. Stale, malformed, future-game or unreconciled data are ignored. Already-calibrated and optional uncertainty-adjusted observations are excluded from the baseline fit.
+Calibration fits price bias and `SIGMA` from censored earlier-round intervals, then chooses `A_MULT` from 0.65–1.05 using only training-round conservative net. It stays in shadow until there are at least six games, sixteen confirmed-covered training lines and eight later validation lines. Validation includes all otherwise eligible high-coverage predictions, including coverage mistakes. A frozen candidate must improve the held-out conservative net lower bound by at least 5% over actual baseline net. Replacing an active calibration also requires a 5% improvement over that incumbent's upper bound on the same holdout. Rebuilding unchanged evidence does not renew the validation date.
 
-Recall supplies whole-line fair-price **ranges** only for similar descriptions with the same policy, quantity and unit. It is not a market unit-rate lookup and never copies old coverage into a new case. No August records are used. Legacy logs without `final_ab` and `line_sources` are excluded rather than guessing a merged submission.
+Only matching model/prompt/estimator identities qualify. Changing the price defaults, log messages, or an unrelated model tier no longer resets another tier's history. Calibrated observations may be reused only when the recorded raw estimate and applied parameters reproduce the actual submission; bias is never compounded. Capped, stated-amount and experimental uncertainty-adjusted lines remain outside parameter fitting/application. Stale, malformed, future-game or unreconciled data are ignored. Runtime logs explain inactive learning; the report records proposed and active parameters separately.
+
+Recall supplies whole-line fair-price **ranges** only for similar descriptions with the same policy, quantity and unit. It is not a market unit-rate lookup and never copies old coverage into a new case. No August records are used. Old successful logs may recover a complete explicitly recorded winning tier, subject to settlement reconciliation. Partial or ambiguous submissions stay excluded. Missing model/prompt identities are never invented, so such records can support loss reports/compatible recall but cannot silently qualify for parameter fitting.
 
 New raw votes, actual submitted prices, per-line sources and model/prompt/configuration/learning provenance remain in ignored `out/`. Implementation tests do not establish a live profit improvement. Current shared-cap schema identifies groups by amount; distinct clauses with equal numeric limits remain a known limitation.
 
 ## Applying this update
 
-Run the offline suite, merge this branch with Michael's current changes, and restart **only Philip's runner**, between game windows. API-key code is unchanged. Keep the previous checkout available for rollback, and start the learning watcher on Philip's machine as above. `FOCUS_ENABLED=0` disables the optional follow-up call; keep `PRICING_UNCERTAINTY=0` until a chronological comparison supports enabling it. This update never overwrites `.env`.
+Pull the update and restart **only Philip's runner**, between game windows. API-key code is unchanged. Keep the previous checkout available for rollback. Learning starts automatically; `LEARNING_AUTO=0` disables background refresh. `FOCUS_ENABLED=0` disables the optional follow-up call; keep `PRICING_UNCERTAINTY=0` until a chronological comparison supports enabling it. This update never overwrites `.env`.
+
+The briefing audit, implemented gaps and remaining experiments are documented in [`notes/BRIEFING_ALIGNMENT.md`](notes/BRIEFING_ALIGNMENT.md). The internal preparation briefing contains August rules; official November rules take precedence.
 
 The one-page submission text and three-minute pitch with Q&A are in [`writeup/ONE_PAGE.md`](writeup/ONE_PAGE.md) and [`writeup/PITCH.md`](writeup/PITCH.md). Their game-8 numbers are a dated snapshot, not final standings.
 
@@ -94,6 +102,7 @@ The one-page submission text and three-minute pitch with Q&A are in [`writeup/ON
 | `watch.py` | Read-only per-game reports and missing-submission alarms. |
 | `eval_cases.py` | Historical/current LLM comparison on finished cases. |
 | `claim_to_fame/feedback.py`, `learn.py` | Settlement reconciliation, loss bounds, calibration, contextual recall and private artifacts. |
+| `claim_to_fame/learning_service.py`, `legacy.py` | Bounded background refresh and strict recovery of old complete submission logs. |
 | `tests/` | Offline domain, round orchestration and historical-import regression tests. |
 | `test_runner.py` | Runs the entire offline suite using Python's standard-library `unittest`. |
 
