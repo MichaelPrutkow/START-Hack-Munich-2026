@@ -67,6 +67,8 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 14 | Preisunsicherheit erhalten und fokussierte Prüfung unterstützen | [X/pricing] | fertig | `claim_to_fame/pricing.py`, `claim_to_fame/prompts.py`, `tests/test_uncertainty.py` |
 | 15 | Runner-Integration, Dokumentation und Pitch | [X] | fertig | `runner.py`, `watch.py`, `tests/test_runtime.py`, `README.md`, `.env.example`, `writeup/`, `AGENTS.md` |
 
+| 16 | Merge mit Michaels optionaler max-Stufe und Preistabellen; offline prüfen und pushen | [X] | fertig | `runner.py`, `tests/test_merge_tiers.py`, `AGENTS.md` |
+
 ## Offene Fragen
 
 - [x] Welche Challenge? → QuantCo. [U]
@@ -206,6 +208,14 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Verifikation: 73 Offline-Tests, davon 72 bestanden und 1 mangels Case-0-PDF übersprungen; synthetische Frist-/Fokus-/Mischabgabe-/Caps-/Kalibrierungsfälle, 400 synthetische Auszahlungsfälle zur Einschließung der verborgenen wahren Werte, keine Live-Abgaben oder Strategie-LLM-Aufrufe. Echter Case-0-PDF-Test mangels entschlüsselter Datei übersprungen.
 - Integration lokal auf `codex/round-feedback`; nicht pushen. Nächster Team-Schritt: mit Michaels Key-Änderungen integrieren, nur auf Philips Mac zwischen Spielfenstern neu starten und dort Watcher mit `--learn` aktivieren.
 
+### 21.11.2026 · Codex · Merge-Konflikt mit `18e51e3` aufgelöst
+
+- User meldet Konflikt beim Merge von `codex/round-feedback` in `main` und autorisiert ausdrücklich den Push nach Prüfung.
+- Michaels optionale `max`-Stufe und `log_prices` unverändert erhalten. Preistabellen laufen für Rules, alle Kandidatenstufen und die tatsächliche finale Mischabgabe. Neue Lern-/Fokus-/Abgabelogik vollständig erhalten.
+- Fokus hat Priorität 2,5 zwischen deep (2) und max (3), damit gleich konsistente Ergebnisse nicht abhängig von der Ankunftsreihenfolge die max-Stufe verdrängen. KeyPool/API-Key-Nutzung unverändert.
+- Neue Offline-Regressionen prüfen max-Konfiguration, beide Ankunftsreihenfolgen, verspätete max-Antworten und Preistabellen. Kein Live-Runner, keine Spielabgabe oder LLM-Anfrage.
+- Abschlussprüfung: 77 Offline-Tests, davon 76 bestanden und 1 mangels Case-0-PDF übersprungen; `git diff --check` sauber. `build_tiers`, `log_prices`, `KeyPool`, `llm_call` und `assess` per AST gegen Michaels `18e51e3` unverändert. Merge wird mit ausdrücklicher User-Freigabe auf `main` gepusht.
+
 ### 21.11.2026 16:45 · Claude · Transaktionsanalyse G1–9 und automatisches Tuning (Branch `auto-tune`, nicht gepusht)
 
 - Analyse aller Transaktionen G1–9 (Cache, keine neue Anfrage): `notes/TRANSAKTIONEN_G1-9.md`. Ab G7 verlieren wir vor allem als Reviewer (b ≈ a nimmt die überhöhten Forderungen des Feldes an; 404 lehnt 96 % ab). Empfehlung SIGMA 0,35 → 1,0, Backtest +5.475 über G1–9.
@@ -215,7 +225,6 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 
 ### 21.11.2026 16:50 · Claude · Alle Branches zusammengeführt (Branch `merge-all`)
 
-- Enthalten: Kaans `codex/round-feedback`, Philips `main` (max-Tier, Preistabelle im Log), `auto-tune`, Michaels `escalation`.
+- Enthalten: `origin/main` e9f4442 (Kaans Merge von `codex/round-feedback` mit max-Tier und `log_prices`, dessen `runner.py` unverändert als Basis), darauf `auto-tune` (`refresh_settings`, `tune.py`) und Michaels `escalation`.
 - Aus `escalation` übernommen: `view_rounds.py` (liest jetzt auch das neue Rundenformat mit `final_ab`, `line_sources`, `votes`) und die Notizen. Nicht übernommen: die Eskalationsstufe `esc` samt `pick_escalation`/`combine_votes`/`build_escalation` und `eval_cases.py --esc`. Sie war standardmäßig aus, verlor im gepaarten Backtest (24.837 → 22.359) und Kaans Fokus-Pass deckt dieselbe Idee ab. Philips Preistabelle (`log_prices`) loggt dafür jede Stufe inkl. Fokus.
 - Achtung: Kaans Fokus-Pass (`FOCUS_ENABLED=1`, 2 Positionen, 2 Stimmen) ist derselbe Gedanke wie die verworfene Eskalation, nur andere Auswahl. Noch nicht gegen gespielte Runden gemessen.
-

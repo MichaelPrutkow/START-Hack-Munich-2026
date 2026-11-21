@@ -536,7 +536,6 @@ def play_game(gid, start, dry=False, use_llm=True):
     items = parse_items(d)
     fb = {i: rule_value(it) for i, it in items.items()}
     rules = {i: (floor_c(v), ceil_c(v)) for i, v in fb.items()}
-    log_prices(gid, "rules", items, rules)
     prov_ok = submit(gid, rules, deadline, dry, "provisional")
     t_prov = time.time() - t_key
     log.info("[%s] %d lines, provisional after %.1fs", gid, len(items), t_prov)
@@ -549,6 +548,7 @@ def play_game(gid, start, dry=False, use_llm=True):
             "sources": {i: "rules" for i in items}, "levels": {i: 0 for i in items}}
     out, usage, est, vote_log = {"rules": rules}, {}, {}, {}
     slock, closed = threading.Lock(), threading.Event()
+    log_prices(gid, "rules", items, rules)
 
     def candidate(tier, voices, selected_items):
         summaries = {i: pricing.estimate_votes([v[i] for v in voices if i in v], disagree=DISAGREE)
@@ -597,6 +597,7 @@ def play_game(gid, start, dry=False, use_llm=True):
                 return False
             out[tier.name], est[tier.name], usage[tier.name] = part, details, used
             vote_log[tier.name] = voices
+            log_prices(gid, tier.name, items, part, details)
             selected = [i for i in part if prefer_estimate(details[i], best["est"].get(i),
                          level=tier.level, previous_level=best["levels"][i])]
             # A shared-cap group is an atomic decision: never mix two allocations.
@@ -622,7 +623,6 @@ def play_game(gid, start, dry=False, use_llm=True):
             publish(tier, part, details, voices, used)
             log.info("[%s] %s (%s): %d/%d lines, %.1fs after key, tokens %s", gid,
                      tier.name, tier.model, len(part), len(items), time.time() - t_key, used)
-            log_prices(gid, tier.name, items, part, details)
             # A bounded second look uses remaining time only after a complete
             # submission exists; no deadline extension and no extra submitter.
             if tier.name != "deep" or os.environ.get("FOCUS_ENABLED", "1") == "0" or closed.is_set():
@@ -636,12 +636,11 @@ def play_game(gid, start, dry=False, use_llm=True):
             # Reassess shared groups only with full-case calls, never partial caps.
             if not focused_items:
                 return
-            focused = Tier("focus", 3, tier.model, tier.extra.get("reasoning_effort"), 2, budget)
+            focused = Tier("focus", tier.level + 0.5, tier.model, tier.extra.get("reasoning_effort"), 2, budget)
             fm = build_focus_prompt(policy, desc, focused_items, details, historical_context=history)
             fv, fu = assess(fm, budget, focused)
             fp, fe = candidate(focused, fv, focused_items)
             publish(focused, fp, fe, fv, fu)
-            log_prices(gid, focused.name, items, fp, fe)
         except NoKeys:
             log.error("[%s] %s: all OpenAI keys exhausted", gid, tier.name)
         except Exception as e:
@@ -659,6 +658,7 @@ def play_game(gid, start, dry=False, use_llm=True):
     with slock:
         closed.set()
         final = best["ab"].copy()
+        log_prices(gid, "final", items, final, best["est"])
         # Serialize the actually stored merged submission, not just the last tier.
         rec = {"game": gid, "campaign": "2026-11", "lines": len(items), "winner": best["tier"],
                "ok": prov_ok or best["tier"] != "rules", "dry": dry,
