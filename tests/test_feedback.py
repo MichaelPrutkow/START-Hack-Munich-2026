@@ -221,7 +221,8 @@ class FeedbackTests(unittest.TestCase):
         self.assertNotEqual(good["a_mult"], 0.85)
         self.assertIn(good["a_mult"], F.A_MULT_GRID)
         self.assertEqual(good["status"], "validated")
-        selected = next(s for s in good["training_scores"] if s["a_mult"] == good["a_mult"])
+        selected = next(s for s in good["training_scores"]
+                        if (s["a_mult"], s["sigma"]) == (good["a_mult"], good["sigma"]))
         self.assertEqual(selected["lower"], max(s["lower"] for s in good["training_scores"]))
         # Change ONLY holdout settlements. Proposed parameters cannot change.
         for gid in (5, 6):
@@ -254,6 +255,16 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(observation["m"], 100)
         self.assertEqual(observation["applied_parameters"], params)
         self.assertEqual(state["training_exclusions"], [])
+
+    def test_field_grid_can_lower_claims_and_reject_inflated_opponent_prices(self):
+        for gid in range(1, 7):
+            self.add(*fixture(gid, lines=4, low=60, high=70, true_t=65))
+        candidate = self.state()["calibrations"][0]
+        self.assertEqual(candidate["status"], "validated")
+        self.assertLess(candidate["a_mult"], .85)
+        self.assertGreater(candidate["sigma"], candidate["fitted_sigma"])
+        self.assertLess(C.rule_b(1, 100 * candidate["bias"], candidate["sigma"]), 70)
+        self.assertGreaterEqual(candidate["conservative_gain"], F.MIN_GAIN)
 
     def test_mislogged_calibrated_prices_are_reported_but_not_trained(self):
         rec, data = fixture()

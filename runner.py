@@ -401,6 +401,50 @@ def configure_pricing():
     A_MULT, SIGMA, DISAGREE = values
 
 
+ENV_PATH = ROOT / ".env"
+SETTINGS_SOURCE = "env"
+AUTO_TUNE = True
+TUNABLE = ("A_MULT", "SIGMA", "DISAGREE", "AUTO_TUNE")
+
+
+def read_env(path):
+    """{key: value} of a .env file (empty values skipped); unlike load_env, no side effects."""
+    out = {}
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip().removeprefix("export ").strip(), v.strip().strip('"').strip("'")
+        if v:
+            out[k] = v
+    return out
+
+
+def refresh_settings():
+    """Re-read manual defaults each game. AUTO_TUNE gates validated per-line learning.
+
+    Exploratory params.json proposals have no independent holdout/estimator identity;
+    only feedback.py's matching validated policy may override defaults. Never raises.
+    """
+    global A_MULT, SIGMA, DISAGREE, SETTINGS_SOURCE, AUTO_TUNE
+    try:
+        env = {**{k: os.environ[k] for k in TUNABLE if k in os.environ}, **read_env(ENV_PATH)}
+        a, s = float(env.get("A_MULT", A_MULT)), float(env.get("SIGMA", SIGMA))
+        dis, src = float(env.get("DISAGREE", DISAGREE)), "env"
+        auto = env.get("AUTO_TUNE", "1") != "0"
+        if not all(math.isfinite(x) and x > 0 for x in (a, s, dis)) or dis < 1:
+            raise ValueError(f"bad settings A_MULT {a} SIGMA {s} DISAGREE {dis}")
+        if (a, s, dis) != (A_MULT, SIGMA, DISAGREE):
+            log.info("settings: A_MULT %.3f -> %.3f, SIGMA %.3f -> %.3f, DISAGREE %.2f -> %.2f (%s)",
+                     A_MULT, a, SIGMA, s, DISAGREE, dis, src)
+        A_MULT, SIGMA, DISAGREE, SETTINGS_SOURCE, AUTO_TUNE = a, s, dis, src, auto
+    except Exception as e:
+        log.warning("settings refresh failed, keeping A_MULT %.3f SIGMA %.3f: %s", A_MULT, SIGMA, e)
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -540,6 +584,10 @@ def play_game(gid, start, dry=False, use_llm=True):
         diagnostic = feedback.calibration_status(
             state, tier.name, model=tier.model, prompt_hash=identity["prompt_hash"].get(tier.name),
             config_hash=identity["config_hash"].get(tier.name))
+        if not AUTO_TUNE:
+            diagnostic = {"status": "disabled", "reason": "AUTO_TUNE=0; manual defaults pinned"}
+        elif os.environ.get("PRICING_UNCERTAINTY", "0") == "1":
+            diagnostic = {"status": "disabled", "reason": "experimental uncertainty policy has no matching validation"}
         log.info("[%s] %s learning: %s", gid, tier.name, diagnostic)
         part, details = {}, {}
         for i, summary in summaries.items():
@@ -549,7 +597,7 @@ def play_game(gid, start, dry=False, use_llm=True):
             if set(selected_items) != set(items) and (summary.get("shared") is not None or
                     previous.get(i, {}).get("shared") is not None):
                 continue
-            eligible = (calibration and os.environ.get("PRICING_UNCERTAINTY", "0") != "1"
+            eligible = (AUTO_TUNE and calibration and os.environ.get("PRICING_UNCERTAINTY", "0") != "1"
                         and p >= calibration.get("min_covered_prob", 0.9)
                         and m > 0 and stated is None and cap is None and summary.get("shared") is None)
             bias = calibration["bias"] if eligible else 1.0
@@ -640,7 +688,7 @@ def play_game(gid, start, dry=False, use_llm=True):
                "usage": dict(usage), "models": {t.name: t.model for t in TIERS},
                "items": items, "tiers": dict(out), "est": dict(est), "votes": dict(vote_log),
                "final_ab": final, "line_sources": best["sources"].copy(),
-               "a_mult": A_MULT, "sigma": SIGMA, **identity,
+               "a_mult": A_MULT, "sigma": SIGMA, "settings": SETTINGS_SOURCE, **identity,
                "policy_hash": hashlib.sha256(policy.encode()).hexdigest(),
                "learning_version": state.get("schema_version") if state else None,
                "learning_max_game": state.get("max_game") if state else None,
@@ -734,6 +782,7 @@ def run_schedule(dry, use_llm, learning=None):
             find_zip(gid)
         except FileNotFoundError:
             log.critical("[%s] ZIP MISSING in cases/ - download it now!", gid)
+        refresh_settings()
         time.sleep(max(0.0, start - time.time() - 0.2))
         try:
             play_game(gid, start, dry, use_llm)

@@ -59,6 +59,7 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 9 | Write-up (1 Seite) und Pitch | – | offen | `writeup/` |
 | 10 | Runner modularisieren, Einstiegspunkte erhalten, offline verifizieren | [X] | fertig | `runner.py`, `claim_to_fame/`, `eval_cases.py`, `test_runner.py`, `tests/`, `README.md`, `.env.example` |
 | 11 | Michaels neue Commits mit lokalem Refactor zusammenführen, offline prüfen, nicht pushen | [X] | fertig | `AGENTS.md`, `README.md`, Merge von `origin/main` |
+| 12 | Review von Kaans Refactor (`94a449c`, Merge `10ad63b`) | [C] | fertig | nur gelesen, Tests in Kopie |
 
 
 | 12 | Backtest tatsächlicher Abgaben, Unsicherheitsgrenzen und Evaluation korrigieren | [X/eval] | fertig | `calibrate.py`, `eval_cases.py`, `tests/test_backtest.py` |
@@ -71,7 +72,7 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 
 | 17 | Briefing-Abgleich und Parameterlernen vervollständigen | [X/params] | fertig | `claim_to_fame/feedback.py`, `tests/test_feedback.py` |
 | 18 | Leaderboard-Import zuverlässig, atomar und fristgerecht machen | [X/data] | fertig | `calibrate.py`, `claim_to_fame/learning_service.py`, `tests/test_learning_service.py` |
-| 19 | Automatische Lernanbindung, Diagnose, Dokumentation und Integration | [X] | in Arbeit (Michaels Push integrieren) | `runner.py`, `learn.py`, `watch.py`, `tests/`, `README.md`, `.env.example`, `notes/BRIEFING_ALIGNMENT.md`, `writeup/`, `AGENTS.md` |
+| 19 | Automatische Lernanbindung, Diagnose, Dokumentation und Integration | [X] | fertig | `runner.py`, `learn.py`, `watch.py`, `tests/`, `README.md`, `.env.example`, `notes/BRIEFING_ALIGNMENT.md`, `writeup/`, `AGENTS.md` |
 | 20 | Eindeutige alte Abgaben wiederverwenden | [X/pricing] | fertig | `claim_to_fame/legacy.py`, `tests/test_legacy.py` |
 
 ## Offene Fragen
@@ -185,6 +186,18 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Verifikation: `.venv/bin/python -B test_runner.py` — 12 bestanden, 1 mangels Case-0-PDF übersprungen; zusätzlicher Offline-Smoke-Test von `watch.report` mit synthetischen Transaktionen bestanden. Keine API-/LLM-Aufrufe, kein Runner oder Watcher gestartet.
 - Status: lokal integriert und getestet. Nächster Schritt: User prüft den Merge; Push bleibt ausdrücklich ausgesetzt.
 
+### 21.11.2026 15:45 · Claude · Review Kaans Refactor, übernommen
+
+- Kaans Refactor ist reine Umstrukturierung: Die 22 verschobenen Definitionen sind per Syntaxbaum identisch mit `7221b47`, `price`/`b_mult`/`aggregate` nehmen A_MULT/SIGMA/DISAGREE jetzt als Parameter, der übrige `runner.py` ist unverändert. Preisregel steht jetzt in `claim_to_fame/pricing.py` (Abschnitt Live-Betrieb nennt noch `runner.py: price`, dort nur ein Wrapper).
+- Verifikation: Alt und neu liefern auf den Fällen 0–5 und 7 dieselben Positionen und denselben Prompt (7/7); 60.000 zufällige Preis-, Aggregations- und Shared-Cap-Eingaben ohne Abweichung; `test_runner.py` 13/13 inkl. echtem Case-0-PDF; `runner.py --check` ok. Kein LLM-Backtest (gleicher Code, nur Token).
+- Michaels `main` per `git pull --ff-only` auf `10ad63b`. Philip: `git pull --ff-only` jederzeit, Neustart nicht nötig. Nebenbefund: `--check` auf Michaels Mac zeigte Timeout bei OPENAI_KEY_1/_2, Key 3 ok; Ursache unklar, auf Philips Mac prüfen.
+
+### 21.11.2026 15:56 · Claude · Modell-Output sichtbar, Eskalation getestet (Branch `escalation`, nicht gepusht)
+
+- `runner.py`: je Position eine Logzeile (Stimmen, p, m, a, b, Klausel), dieselben Daten in `rounds.jsonl` (`est.<tier>.votes`, `clause`, `a`, `b`). Neu `view_rounds.py` (liest `rounds.jsonl`, zeigt t-Spanne aus dem Leaderboard-Cache). Eskalationsstufe `esc` (zweiter Blick auf die größten gedeckten Zeilen nach deep, nur vollständige Abgaben) eingebaut, aber **Default aus**: gepaarter Backtest ohne Gewinn (DECISIONS 15:55).
+- Module: `prompts.build_escalation`, `pricing.pick_escalation`, `pricing.combine_votes`; `eval_cases.py --esc` (gepaart), Backtest nur auf Zeilen mit Klammer. Tests 16/16 (`tests/test_runtime.py` setzt `ESC=None` zur Isolation).
+- Nächster Schritt: Michaels OK zum Push; danach Philip `git pull` + Neustart zwischen zwei Spielen. Danach Recall aus eigenen Klammern.
+
 ### 21.11.2026 · Codex · Umfang der Verbesserungen
 
 - User beauftragt Evaluation, Lernspeicher, Preisunsicherheit, fokussierte Prüfung und Write-up/Pitch. API-Key-Nutzung ausdrücklich ausgenommen: übernimmt Michaels LLM. KeyPool, llm_call und Schlüsselkonfiguration bleiben hier unverändert.
@@ -209,6 +222,19 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Neue Offline-Regressionen prüfen max-Konfiguration, beide Ankunftsreihenfolgen, verspätete max-Antworten und Preistabellen. Kein Live-Runner, keine Spielabgabe oder LLM-Anfrage.
 - Abschlussprüfung: 77 Offline-Tests, davon 76 bestanden und 1 mangels Case-0-PDF übersprungen; `git diff --check` sauber. `build_tiers`, `log_prices`, `KeyPool`, `llm_call` und `assess` per AST gegen Michaels `18e51e3` unverändert. Merge wird mit ausdrücklicher User-Freigabe auf `main` gepusht.
 
+### 21.11.2026 16:45 · Claude · Transaktionsanalyse G1–9 und automatisches Tuning (Branch `auto-tune`, nicht gepusht)
+
+- Analyse aller Transaktionen G1–9 (Cache, keine neue Anfrage): `notes/TRANSAKTIONEN_G1-9.md`. Ab G7 verlieren wir vor allem als Reviewer (b ≈ a nimmt die überhöhten Forderungen des Feldes an; 404 lehnt 96 % ab). Empfehlung SIGMA 0,35 → 1,0, Backtest +5.475 über G1–9.
+- Auf Kaans `codex/round-feedback` aufgesetzt (nicht parallel): neu `claim_to_fame/tuning.py` + `tune.py` (Replay A_MULT/SIGMA gegen das Feld, Leitplanken, `out/params.json`, Verlauf `out/tune.jsonl`); `watch.py --learn` ruft es nach `feedback.build_state` auf (nur Cache, keine API). `runner.py`: `refresh_settings()` vor jedem Spiel (`.env` neu lesen, `params.json` bei `AUTO_TUNE=1`), `settings` im Rundenrecord. `strategy_identity` ohne `a_mult`/`sigma`: das sind Preismultiplikatoren, keine Schätzer-Eigenschaft; sonst würde jeder Tuning-Schritt Kaans Kalibrier-Kohorte zurücksetzen. **Bitte Kaan gegenlesen.**
+- Verifikation: `test_runner.py` 84 Tests, 83 ok, 1 übersprungen (Case-0-PDF); neu `tests/test_tuning.py` (11). Probelauf `tune.py --from-leaderboard 0.85` auf G1–9.
+- Nächster Schritt: Michaels OK zum Push; mit `origin/main` (18e51e3, max-Tier) und Michaels lokalem `escalation` zusammenführen; Philip `git pull`, Runner zwischen zwei Spielen neu starten, Watcher mit `--learn` starten.
+
+### 21.11.2026 16:50 · Claude · Alle Branches zusammengeführt (Branch `merge-all`)
+
+- Enthalten: `origin/main` e9f4442 (Kaans Merge von `codex/round-feedback` mit max-Tier und `log_prices`, dessen `runner.py` unverändert als Basis), darauf `auto-tune` (`refresh_settings`, `tune.py`) und Michaels `escalation`.
+- Aus `escalation` übernommen: `view_rounds.py` (liest jetzt auch das neue Rundenformat mit `final_ab`, `line_sources`, `votes`) und die Notizen. Nicht übernommen: die Eskalationsstufe `esc` samt `pick_escalation`/`combine_votes`/`build_escalation` und `eval_cases.py --esc`. Sie war standardmäßig aus, verlor im gepaarten Backtest (24.837 → 22.359) und Kaans Fokus-Pass deckt dieselbe Idee ab. Philips Preistabelle (`log_prices`) loggt dafür jede Stufe inkl. Fokus.
+- Achtung: Kaans Fokus-Pass (`FOCUS_ENABLED=1`, 2 Positionen, 2 Stimmen) ist derselbe Gedanke wie die verworfene Eskalation, nur andere Auswahl. Noch nicht gegen gespielte Runden gemessen.
+
 ### 21.11.2026 · Codex · Briefing-Lücken und automatische Lernschleife
 
 - Nutzer beauftragt Briefing-Abgleich, Parameterverbesserung und Leaderboard-Nutzung; bestehende Push-Freigabe gilt. Implementierung im isolierten Klon, kein Live-Runner/API-/LLM-Aufruf. Audit mit Quellen-/Seitenangaben: `notes/BRIEFING_ALIGNMENT.md`. Interne August-Auszahlungsregeln nicht übernehmen.
@@ -216,3 +242,11 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Bias/σ und Forderungsmultiplikator lernen, neue Parameter nur nach chronologischem konservativem Holdout. Identität je Schätzer statt gesamter Runner-Datei; bereits kalibrierte Zeilen über rohe m plus angewandte Parameter erneut nutzbar. Vorgänger nur mit eigenem Nachweis ersetzen; gleiche Daten verlängern keine Validierungsfrist. Schema v2; keine erfundenen Identitäten für alte Logs.
 - 123 Offline-Tests: 122 bestanden, eine Case-0-PDF-Prüfung mangels Datei übersprungen. API-/Key-/Modellfunktionen und `log_prices` per AST gegen `e9f4442` unverändert. Keine Produktions-Gewinnbehauptung.
 - Während des Abschlusses kam Michaels `67d41f2` mit eigenem Auto-Tuning und `view_rounds.py`. Nutzer fordert ausdrücklich Abruf/Integration. Diese ist der nächste Schritt; zwei unabhängige Parameter-Automatiken werden zusammengeführt.
+
+### 21.11.2026 · Codex · Michaels `67d41f2` integriert, ein gemeinsamer automatischer Lerner
+
+- Michaels Historie, `view_rounds.py`, Notizen und Neuladen manueller Einstellungen vor jeder geplanten Runde sind erhalten. `AUTO_TUNE=0` setzt tatsächlich die manuellen a/σ-Werte fest; `LEARNING_AUTO=0` schaltet unabhängig davon den Hintergrundimport ab. Ohne diese Abschaltungen lernt der normale Runner selbständig, kein zweiter Prozess erforderlich.
+- Der Suchraum enthält jetzt A_MULT 0,50–1,05 und SIGMA 0,30–1,40 sowie den zensiert geschätzten Spread. Beide Parameter werden gemeinsam am konservativen Trainings-Netto gewählt; Bias bleibt separat geschätzt. Der spätere Holdout und die Prüfung gegen einen bereits aktiven Parametersatz bleiben zwingend.
+- Das ältere `tune.py` bleibt als explorative Auswertung erhalten. Es interpoliert unbekannte Fairness/Annahme, behandelt angenommene Zahlungen teils als ursprüngliche Forderungen und wählt/prüft auf denselben Daten. Daher darf dessen `params.json` keine Live-Parameter überschreiben; der breitere Suchraum ist im validierten Pfad integriert. Auch `watch.py --learn` schreibt keine konkurrierenden Einstellungen mehr. Cache-only-Auswertung löst keine versteckten Downloads aus.
+- Abschließende Verifikation: 137 Offline-Tests, 136 bestanden, eine fehlende lokale Case-0-PDF übersprungen; `git diff --check` sauber. Neue Fälle prüfen breitere Reviewer-Regel, manuelles Festsetzen, Ausschluss unvalidierter Parameterdateien, unveränderte Validierungsdaten, Altlog-Recall und Fristabbrüche. Kein Live-Runner und kein API-/LLM-Aufruf.
+- Nächster Schritt: auf `main` pushen (Nutzer autorisiert), Philip aktualisiert und startet ausschließlich seinen Runner zwischen den Spielfenstern neu. `uv run learn.py --status` zeigt aktive/noch ungeprüfte Parameter; ein realer Gewinnnachweis braucht Philips lokale Rundenlogs und passende spätere Runden.

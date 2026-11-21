@@ -74,11 +74,13 @@ uv run learn.py --team chineseModels
 
 `--refresh` explicitly fetches missing completed public games represented in the local logs, using the same bounded refresh and cache locks. `--before-game N` excludes game N and later data. The report separates reviewer overpayment, wrongful-rejection penalties and bounded issuer opportunity losses, grouped by round and actual source tier. It also shows opponents' acceptance of known-unfair positive claims and rejection of known-fair claims; unknown fairness remains separate.
 
-Calibration fits price bias and `SIGMA` from censored earlier-round intervals, then chooses `A_MULT` from 0.65–1.05 using only training-round conservative net. It stays in shadow until there are at least six games, sixteen confirmed-covered training lines and eight later validation lines. Validation includes all otherwise eligible high-coverage predictions, including coverage mistakes. A frozen candidate must improve the held-out conservative net lower bound by at least 5% over actual baseline net. Replacing an active calibration also requires a 5% improvement over that incumbent's upper bound on the same holdout. Rebuilding unchanged evidence does not renew the validation date.
+Calibration fits price bias and an initial spread from censored earlier-round intervals, then chooses `A_MULT` (0.50–1.05) and `SIGMA` (0.30–1.40, plus the fitted spread) against the field using only training-round conservative net. It stays in shadow until there are at least six games, sixteen confirmed-covered training lines and eight later validation lines. Validation includes all otherwise eligible high-coverage predictions, including coverage mistakes. A frozen candidate must improve the held-out conservative net lower bound by at least 5% over actual baseline net. Replacing an active calibration also requires a 5% improvement over that incumbent's upper bound on the same holdout. Rebuilding unchanged evidence does not renew the validation date.
 
 Only matching model/prompt/estimator identities qualify. Changing the price defaults, log messages, or an unrelated model tier no longer resets another tier's history. Calibrated observations may be reused only when the recorded raw estimate and applied parameters reproduce the actual submission; bias is never compounded. Capped, stated-amount and experimental uncertainty-adjusted lines remain outside parameter fitting/application. Stale, malformed, future-game or unreconciled data are ignored. Runtime logs explain inactive learning; the report records proposed and active parameters separately.
 
 Recall supplies whole-line fair-price **ranges** only for similar descriptions with the same policy, quantity and unit. It is not a market unit-rate lookup and never copies old coverage into a new case. No August records are used. Old successful logs may recover a complete explicitly recorded winning tier, subject to settlement reconciliation. Partial or ambiguous submissions stay excluded. Missing model/prompt identities are never invented, so such records can support loss reports/compatible recall but cannot silently qualify for parameter fitting.
+
+Michael's per-game `.env` refresh and `view_rounds.py` are retained. Manual changes to `A_MULT`, `SIGMA`, `DISAGREE` and `AUTO_TUNE` take effect before the next scheduled round without restarting. `AUTO_TUNE=0` pins manual price defaults; `LEARNING_AUTO=0` independently disables the background downloader. The older `tune.py` remains an exploratory analysis tool: it imputes unknown prices and selects and compares settings on the same data. Its `out/params.json` proposals no longer bypass validation or compete with `learning.json` for live prices. The wider field-search ranges are integrated into the single validated learner above.
 
 New raw votes, actual submitted prices, per-line sources and model/prompt/configuration/learning provenance remain in ignored `out/`. Implementation tests do not establish a live profit improvement. Current shared-cap schema identifies groups by amount; distinct clauses with equal numeric limits remain a known limitation.
 
@@ -100,9 +102,11 @@ The one-page submission text and three-minute pitch with Q&A are in [`writeup/ON
 | `claim_to_fame/pricing.py` | Vote aggregation, pro-rata shared caps, rounding and the a/b rule. Parameters are explicit; the runner forwards its current settings. |
 | `calibrate.py` | Read-only leaderboard analysis and calibration. |
 | `watch.py` | Read-only per-game reports and missing-submission alarms. |
+| `view_rounds.py` | Read-only view of `out/rounds.jsonl`: per line and tier the votes, p, m, a, b, clause, line source and (if cached) the true t interval. |
 | `eval_cases.py` | Historical/current LLM comparison on finished cases. |
 | `claim_to_fame/feedback.py`, `learn.py` | Settlement reconciliation, loss bounds, calibration, contextual recall and private artifacts. |
 | `claim_to_fame/learning_service.py`, `legacy.py` | Bounded background refresh and strict recovery of old complete submission logs. |
+| `claim_to_fame/tuning.py`, `tune.py` | Exploratory historical field replay; proposals are not applied by the runner. |
 | `tests/` | Offline domain, round orchestration and historical-import regression tests. |
 | `test_runner.py` | Runs the entire offline suite using Python's standard-library `unittest`. |
 

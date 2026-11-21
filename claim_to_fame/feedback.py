@@ -21,16 +21,18 @@ from .pricing import ceil_c, floor_c
 
 
 SCHEMA_VERSION = 2
-ALGORITHM = "interval-fit-alpha-grid-v2"
+ALGORITHM = "interval-fit-field-grid-v2"
 CAMPAIGN = "2026-11"
 MIN_GAMES, MIN_TRAIN, MIN_HOLDOUT = 6, 16, 8
 MIN_GAIN = 0.05
 MIN_COVERED_PROB = 0.9
-A_MULT_GRID = (0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.05)
+A_MULT_GRID = (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.05)
+SIGMA_GRID = (0.30, 0.35, 0.50, 0.65, 0.80, 1.00, 1.20, 1.40)
 PARAMETER_KEYS = ("a_mult", "bias", "sigma")
 CONTROLS = {"minimum_games": MIN_GAMES, "minimum_fit_lines": MIN_TRAIN,
             "minimum_holdout_lines": MIN_HOLDOUT, "minimum_gain": MIN_GAIN,
             "minimum_covered_probability": MIN_COVERED_PROB, "a_mult_grid": list(A_MULT_GRID),
+            "sigma_grid": list(SIGMA_GRID),
             "selection": "training conservative net only; frozen chronological holdout",
             "baseline": "actual observed holdout net; denominator max(abs(net), 1 EUR)",
             "scope": "uncapped, no stated amount, no uncertainty adjustment"}
@@ -224,11 +226,11 @@ def _fit_candidate(rows, checkpoint=None):
            math.log(r["d"]["t"][1] / r["m"])) for r in rows]
     best = (-math.inf, 0.0, 0.35)
     # Include right-censored observations; never replace an interval by its midpoint.
-    for mu_i in range(-30, 31, 3):
+    for mu_i in range(-90, 31, 3):
         if checkpoint:
             checkpoint()
         mu = mu_i / 100
-        for sd_i in range(20, 76, 5):
+        for sd_i in range(20, 141, 5):
             sd = sd_i / 100
             ll = sum(math.log(max(1e-12, (N.cdf((hi - mu) / sd) if math.isfinite(hi) else 1.0)
                                   - N.cdf((lo - mu) / sd))) for lo, hi in iv)
@@ -237,7 +239,7 @@ def _fit_candidate(rows, checkpoint=None):
     weight = len(rows) / (len(rows) + 40)
     baseline = statistics.median(r["baseline_sigma"] for r in rows)
     return {"bias": round(min(1.25, max(0.75, math.exp(best[1] * weight))), 4),
-            "sigma": round(min(0.75, max(0.2, baseline + weight * (best[2] - baseline))), 4)}
+            "sigma": round(min(1.40, max(0.2, baseline + weight * (best[2] - baseline))), 4)}
 
 
 def _score_rows(rows, params, team, checkpoint=None):
@@ -265,7 +267,7 @@ def _calibrate(rows, identity, team, checkpoint=None):
     fit = [r for r in train if r["d"]["t"][0] > 0]
     holdout = [r for r in rows if r["game"] in holdout_games]
     baseline_params = {"a_mult": statistics.median(r["baseline_alpha"] for r in (train or rows)),
-                       "bias": 1.0, "sigma": min(0.75, max(0.2,
+                       "bias": 1.0, "sigma": min(1.40, max(0.2,
                            statistics.median(r["baseline_sigma"] for r in (train or rows))))}
     evidence = [{"game": r["game"], "line": r["line"], "m": r["m"], "p": r["p"],
                  "applied": r["applied_parameters"], "baseline": [r["baseline_alpha"], r["baseline_sigma"]],
@@ -289,16 +291,21 @@ def _calibrate(rows, identity, team, checkpoint=None):
         candidate["proposed_parameters"] = dict(baseline_params)
         return candidate
     candidate.update(_fit_candidate(fit, checkpoint))
-    # Select the charge multiplier using TRAINING settlements only. Bias and sigma
-    # remain the fixed censored fit; neither grid selection nor tie-breaking sees holdout.
+    # Select the charge multiplier AND reviewer spread using TRAINING settlements only.
+    # Michael's field replay showed why a narrow fitted spread need not be optimal
+    # against opponents. Keep the fitted spread in the grid and freeze before holdout.
+    fitted_sigma = candidate["sigma"]
+    candidate["fitted_sigma"] = fitted_sigma
     scores = []
     for alpha in A_MULT_GRID:
-        lo, hi = _score_rows(train, {**candidate, "a_mult": alpha}, team, checkpoint)
-        candidate["training_scores"].append({"a_mult": alpha, **_range(lo, hi)})
-        if math.isfinite(lo) and math.isfinite(hi):
-            scores.append((lo, -abs(alpha - baseline_params["a_mult"]), -alpha, alpha))
+        for sigma in sorted(set(SIGMA_GRID + (fitted_sigma,))):
+            lo, hi = _score_rows(train, {**candidate, "a_mult": alpha, "sigma": sigma}, team, checkpoint)
+            candidate["training_scores"].append({"a_mult": alpha, "sigma": sigma, **_range(lo, hi)})
+            if math.isfinite(lo) and math.isfinite(hi):
+                scores.append((lo, -abs(alpha - baseline_params["a_mult"]),
+                               -abs(sigma - fitted_sigma), -alpha, -sigma, alpha, sigma))
     if scores:
-        candidate["a_mult"] = max(scores)[-1]
+        candidate["a_mult"], candidate["sigma"] = max(scores)[-2:]
     candidate["proposed_parameters"] = {key: candidate[key] for key in PARAMETER_KEYS}
     if not scores:
         candidate.update(reason="training payoff bounds are unbounded", reason_code="unbounded_training")
@@ -608,7 +615,7 @@ def _valid_state(state, before_game, now, max_age_hours):
             return False
         if not 0.75 <= _finite(candidate["bias"], positive=True) <= 1.25:
             return False
-        if not 0.2 <= _finite(candidate["sigma"], positive=True) <= 0.75:
+        if not 0.2 <= _finite(candidate["sigma"], positive=True) <= 1.40:
             return False
         if candidate.get("status") == "validated" and not _validated(candidate):
             return False
@@ -648,7 +655,7 @@ def _validated(candidate):
         baseline, lower = candidate["holdout_baseline_net"], candidate["holdout_candidate"]["lower"]
         return (candidate.get("status") == "validated" and candidate.get("algorithm") == ALGORITHM
                 and candidate.get("a_mult") in A_MULT_GRID
-                and 0.75 <= candidate["bias"] <= 1.25 and 0.2 <= candidate["sigma"] <= 0.75
+                and 0.75 <= candidate["bias"] <= 1.25 and 0.2 <= candidate["sigma"] <= 1.40
                 and candidate.get("active_parameters") == {k: candidate[k] for k in PARAMETER_KEYS}
                 and candidate.get("minimum_gain") == MIN_GAIN
                 and len(set(train + held)) >= MIN_GAMES

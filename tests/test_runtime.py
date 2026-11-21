@@ -223,3 +223,15 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(detail["calibration_applied"])
             self.assertTrue(detail["uncertainty_applied"])
             self.assertEqual((detail["a_mult"], detail["bias"], detail["sigma"]), (0.85, 1.0, 0.35))
+
+    def test_manual_pin_disables_otherwise_validated_parameters(self):
+        self.prepare_round([R.Tier("fast", 1, "fake", None, 3, 20)])
+        self.enterContext(patch.object(R, "AUTO_TUNE", False))
+        self.enterContext(patch.object(R.feedback, "calibration_for", return_value={
+            "bias": 0.8, "sigma": 1.0, "a_mult": 0.7, "min_covered_prob": 0.9}))
+        self.enterContext(patch.object(R, "assess", return_value=([
+            {i: {"covered_prob": 1, "t_if_covered": 100} for i in (1, 4)}
+            for _ in range(3)], {})))
+        rec = R.play_game(4, time.time(), dry=True)
+        self.assertEqual(rec["final_ab"][1][0], 85)
+        self.assertFalse(rec["est"]["fast"][1]["calibration_applied"])
