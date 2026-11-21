@@ -36,6 +36,7 @@ import requests
 
 from claim_to_fame import pricing, prompts
 from claim_to_fame import feedback
+from claim_to_fame import recall as recall_mod
 from claim_to_fame.invoices import (
     FALLBACK_LINE, FALLBACK_MAX, LINE_END_RE, LINE_RE, STOP_RE, UNIT_RATE, UNITS,
     header_map, norm_unit, num, parse_items, parse_lines, rule_value,
@@ -423,6 +424,15 @@ def read_env(path):
     return out
 
 
+def recall_setting():
+    """RECALL_CAP from .env each game: '1' two-sided caps, 'loose' also one-sided, 'shadow' (default) logs, '0' off."""
+    try:
+        mode = read_env(ENV_PATH).get("RECALL_CAP", os.environ.get("RECALL_CAP", "shadow")).strip().lower()
+    except Exception:
+        mode = "shadow"
+    return mode if mode in ("0", "1", "loose", "shadow") else "shadow"
+
+
 def refresh_settings():
     """Re-read manual defaults each game. AUTO_TUNE gates validated per-line learning.
 
@@ -587,6 +597,15 @@ def play_game(gid, start, dry=False, use_llm=True):
     state_path = Path(os.environ.get("LEARNING_FILE", str(OUT / "learning.json")))
     state = feedback.load_state(state_path, before_game=gid) if gid else None
     history = feedback.context_for_items(state, items, policy) if state else ""
+    recall_mode, recall_caps = recall_setting(), {}
+    if recall_mode != "0" and gid:
+        try:
+            recall_caps = recall_mod.caps_for(gid, items, policy, OUT / "cases", OUT / "leaderboard",
+                                              os.environ.get("TEAM_NAME", "chineseModels"))
+        except Exception as e:                      # recall is optional; never blocks a round
+            log.warning("[%s] recall failed: %s", gid, type(e).__name__)
+    log.info("[%s] recall (%s): %d lines with same-policy evidence, %d with a cap", gid, recall_mode,
+             len(recall_caps), sum(1 for v in recall_caps.values() if v["cap"] is not None))
     log.info("[%s] learning: %s; completed game %s; recalled context %d chars", gid,
              "available" if state else "no usable artifact; baseline parameters",
              state.get("max_game") if state else "-", len(history))
@@ -644,6 +663,8 @@ def play_game(gid, start, dry=False, use_llm=True):
                       "uncertainty_applied": os.environ.get("PRICING_UNCERTAINTY", "0") == "1"}
             part[i] = price(p, m, stated, cap, fb[i], uncertainty=summary["log_spread"],
                             bias=bias, sigma=sigma, a_mult=alpha)
+            if i in recall_caps:
+                part[i] = recall_mod.apply_cap(part[i], recall_caps[i], detail, recall_mode)
             details[i] = detail
         return part, details
 
@@ -726,6 +747,7 @@ def play_game(gid, start, dry=False, use_llm=True):
                "a_mult": A_MULT, "sigma": SIGMA, "settings": SETTINGS_SOURCE, "commit": GIT_COMMIT,
                "confirmed": list(confirmed), **identity,
                "policy_hash": hashlib.sha256(policy.encode()).hexdigest(),
+               "recall": {"mode": recall_mode, "lines": recall_caps},
                "learning_version": state.get("schema_version") if state else None,
                "learning_max_game": state.get("max_game") if state else None,
                "learning_created_at": state.get("created_at") if state else None}

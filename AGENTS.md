@@ -75,6 +75,7 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 18 | Leaderboard-Import zuverlässig, atomar und fristgerecht machen | [X/data] | fertig | `calibrate.py`, `claim_to_fame/learning_service.py`, `tests/test_learning_service.py` |
 | 19 | Automatische Lernanbindung, Diagnose, Dokumentation und Integration | [X] | fertig | `runner.py`, `learn.py`, `watch.py`, `tests/`, `README.md`, `.env.example`, `notes/BRIEFING_ALIGNMENT.md`, `writeup/`, `AGENTS.md` |
 | 20 | Eindeutige alte Abgaben wiederverwenden | [X/pricing] | fertig | `claim_to_fame/legacy.py`, `tests/test_legacy.py` |
+| 21 | Recall-Deckel für a aus eigenen abgerechneten Spielen (Schatten/live per `.env`) | [C] | review | `claim_to_fame/recall.py`, `runner.py`, `tests/test_recall.py`, `.env.example`, `README.md`, `notes/DECISIONS.md` |
 
 ## Offene Fragen
 
@@ -274,3 +275,10 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Mindestbelege bleiben 16 gedeckte Trainingszeilen, acht aktuelle Prüfzeilen, mindestens zwei aktuelle Prüfspiele und sechs Spiele insgesamt, plus 5 % konservativer Vorteil. Bei fünf aktuellen Prüfzeilen wird nun bereits trainiert, aber noch keine automatische Freigabe behauptet. Diagnose nennt historische Mengen, Train-/Prüfspiele und tatsächliche Ausschlussgründe.
 - 164 Offline-Tests: 163 bestanden, eine mangels Case-0-PDF übersprungen. Neue Regressionen: historischer Fit mit fünf Prüfzeilen, erfolgreiche Freigabe bei acht, Ablehnung bei schlechten aktuellen Ergebnissen, kein Leak späterer Altlogs, keine erfundenen m, keine Altlog-Selbstvalidierung und Ablehnung manipulierter Herkunft. Kein Live-Runner, keine API-/LLM-Aufrufe. `runner.py`, Michaels Dashboard/Shadow-/Tuning-Code bleiben unverändert.
 - Für Philip: nach Pull nur seinen Runner zwischen Spielfenstern neu starten. Die nächste automatische Aktualisierung baut aus vorhandenen Logs/Caches; ein separater Lernprozess oder Datei-Upload ist nicht nötig. Neue Parameter und ein Turniergewinn sind erst nach realer Freigabe belegt.
+
+### 21.11.2026 17:45 · Claude · Recall-Deckel (Branch `recall`, nicht gepusht)
+
+- Befund: Policen wiederholen sich wörtlich mit umformulierten Rechnungen (G1/9/15, G2/6, G3/11/14, G8/10/13). Auf der größten gedeckten Position waren wir nur in 6 von 16 Spielen fair (404: 11, FDN: 14); dort entsteht der Rückstand.
+- `claim_to_fame/recall.py`: vor der Preisbildung frühere Spiele mit gleicher Policen-Kennung aus `out/cases/` + `out/leaderboard/` lesen, ähnliche Positionen finden, bei beidseitig begrenzter t-Spanne `a` auf deren Mitte deckeln. Nur senken, `b` unverändert, Zeilen mit Dokumentbetrag ausgenommen. `RECALL_CAP` wird jedes Spiel aus `.env` gelesen: `shadow` (Default), `1`, `loose`, `0`. Rundenrekord `recall`, je Zeile `recall_cap`/`recall_applied`. Fehler im Recall blockieren keine Runde.
+- Backtest und Vergleich: `notes/DECISIONS.md` Zeile 17:45. Tests: 174 (173 ok, 1 Case-0-PDF übersprungen), neu `tests/test_recall.py` (10). `strategy_identity` unverändert; gedeckelte Zeilen fallen aus dem Parameterlernen.
+- Nächster Schritt: Michaels OK zum Push; Philip `git pull --ff-only`, Neustart zwischen zwei Spielen, `RECALL_CAP=1` in `.env`.
