@@ -59,6 +59,7 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 9 | Write-up (1 Seite) und Pitch | – | offen | `writeup/` |
 | 10 | Runner modularisieren, Einstiegspunkte erhalten, offline verifizieren | [X] | fertig | `runner.py`, `claim_to_fame/`, `eval_cases.py`, `test_runner.py`, `tests/`, `README.md`, `.env.example` |
 | 11 | Michaels neue Commits mit lokalem Refactor zusammenführen, offline prüfen, nicht pushen | [X] | fertig | `AGENTS.md`, `README.md`, Merge von `origin/main` |
+| 12 | Review von Kaans Refactor (`94a449c`, Merge `10ad63b`) | [C] | fertig | nur gelesen, Tests in Kopie |
 
 
 | 12 | Backtest tatsächlicher Abgaben, Unsicherheitsgrenzen und Evaluation korrigieren | [X/eval] | fertig | `calibrate.py`, `eval_cases.py`, `tests/test_backtest.py` |
@@ -177,6 +178,18 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Verifikation: `.venv/bin/python -B test_runner.py` — 12 bestanden, 1 mangels Case-0-PDF übersprungen; zusätzlicher Offline-Smoke-Test von `watch.report` mit synthetischen Transaktionen bestanden. Keine API-/LLM-Aufrufe, kein Runner oder Watcher gestartet.
 - Status: lokal integriert und getestet. Nächster Schritt: User prüft den Merge; Push bleibt ausdrücklich ausgesetzt.
 
+### 21.11.2026 15:45 · Claude · Review Kaans Refactor, übernommen
+
+- Kaans Refactor ist reine Umstrukturierung: Die 22 verschobenen Definitionen sind per Syntaxbaum identisch mit `7221b47`, `price`/`b_mult`/`aggregate` nehmen A_MULT/SIGMA/DISAGREE jetzt als Parameter, der übrige `runner.py` ist unverändert. Preisregel steht jetzt in `claim_to_fame/pricing.py` (Abschnitt Live-Betrieb nennt noch `runner.py: price`, dort nur ein Wrapper).
+- Verifikation: Alt und neu liefern auf den Fällen 0–5 und 7 dieselben Positionen und denselben Prompt (7/7); 60.000 zufällige Preis-, Aggregations- und Shared-Cap-Eingaben ohne Abweichung; `test_runner.py` 13/13 inkl. echtem Case-0-PDF; `runner.py --check` ok. Kein LLM-Backtest (gleicher Code, nur Token).
+- Michaels `main` per `git pull --ff-only` auf `10ad63b`. Philip: `git pull --ff-only` jederzeit, Neustart nicht nötig. Nebenbefund: `--check` auf Michaels Mac zeigte Timeout bei OPENAI_KEY_1/_2, Key 3 ok; Ursache unklar, auf Philips Mac prüfen.
+
+### 21.11.2026 15:56 · Claude · Modell-Output sichtbar, Eskalation getestet (Branch `escalation`, nicht gepusht)
+
+- `runner.py`: je Position eine Logzeile (Stimmen, p, m, a, b, Klausel), dieselben Daten in `rounds.jsonl` (`est.<tier>.votes`, `clause`, `a`, `b`). Neu `view_rounds.py` (liest `rounds.jsonl`, zeigt t-Spanne aus dem Leaderboard-Cache). Eskalationsstufe `esc` (zweiter Blick auf die größten gedeckten Zeilen nach deep, nur vollständige Abgaben) eingebaut, aber **Default aus**: gepaarter Backtest ohne Gewinn (DECISIONS 15:55).
+- Module: `prompts.build_escalation`, `pricing.pick_escalation`, `pricing.combine_votes`; `eval_cases.py --esc` (gepaart), Backtest nur auf Zeilen mit Klammer. Tests 16/16 (`tests/test_runtime.py` setzt `ESC=None` zur Isolation).
+- Nächster Schritt: Michaels OK zum Push; danach Philip `git pull` + Neustart zwischen zwei Spielen. Danach Recall aus eigenen Klammern.
+
 ### 21.11.2026 · Codex · Umfang der Verbesserungen
 
 - User beauftragt Evaluation, Lernspeicher, Preisunsicherheit, fokussierte Prüfung und Write-up/Pitch. API-Key-Nutzung ausdrücklich ausgenommen: übernimmt Michaels LLM. KeyPool, llm_call und Schlüsselkonfiguration bleiben hier unverändert.
@@ -199,4 +212,10 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Auf Kaans `codex/round-feedback` aufgesetzt (nicht parallel): neu `claim_to_fame/tuning.py` + `tune.py` (Replay A_MULT/SIGMA gegen das Feld, Leitplanken, `out/params.json`, Verlauf `out/tune.jsonl`); `watch.py --learn` ruft es nach `feedback.build_state` auf (nur Cache, keine API). `runner.py`: `refresh_settings()` vor jedem Spiel (`.env` neu lesen, `params.json` bei `AUTO_TUNE=1`), `settings` im Rundenrecord. `strategy_identity` ohne `a_mult`/`sigma`: das sind Preismultiplikatoren, keine Schätzer-Eigenschaft; sonst würde jeder Tuning-Schritt Kaans Kalibrier-Kohorte zurücksetzen. **Bitte Kaan gegenlesen.**
 - Verifikation: `test_runner.py` 84 Tests, 83 ok, 1 übersprungen (Case-0-PDF); neu `tests/test_tuning.py` (11). Probelauf `tune.py --from-leaderboard 0.85` auf G1–9.
 - Nächster Schritt: Michaels OK zum Push; mit `origin/main` (18e51e3, max-Tier) und Michaels lokalem `escalation` zusammenführen; Philip `git pull`, Runner zwischen zwei Spielen neu starten, Watcher mit `--learn` starten.
+
+### 21.11.2026 16:50 · Claude · Alle Branches zusammengeführt (Branch `merge-all`)
+
+- Enthalten: Kaans `codex/round-feedback`, Philips `main` (max-Tier, Preistabelle im Log), `auto-tune`, Michaels `escalation`.
+- Aus `escalation` übernommen: `view_rounds.py` (liest jetzt auch das neue Rundenformat mit `final_ab`, `line_sources`, `votes`) und die Notizen. Nicht übernommen: die Eskalationsstufe `esc` samt `pick_escalation`/`combine_votes`/`build_escalation` und `eval_cases.py --esc`. Sie war standardmäßig aus, verlor im gepaarten Backtest (24.837 → 22.359) und Kaans Fokus-Pass deckt dieselbe Idee ab. Philips Preistabelle (`log_prices`) loggt dafür jede Stufe inkl. Fokus.
+- Achtung: Kaans Fokus-Pass (`FOCUS_ENABLED=1`, 2 Positionen, 2 Stimmen) ist derselbe Gedanke wie die verworfene Eskalation, nur andere Auswahl. Noch nicht gegen gespielte Runden gemessen.
 

@@ -108,6 +108,7 @@ The one-page submission text and three-minute pitch with Q&A are in [`writeup/ON
 | `claim_to_fame/pricing.py` | Vote aggregation, pro-rata shared caps, rounding and the a/b rule. Parameters are explicit; the runner forwards its current settings. |
 | `calibrate.py` | Read-only leaderboard analysis and calibration. |
 | `watch.py` | Read-only per-game reports and missing-submission alarms. |
+| `view_rounds.py` | Read-only view of `out/rounds.jsonl`: per line and tier the votes, p, m, a, b, clause, line source and (if cached) the true t interval. |
 | `eval_cases.py` | Historical/current LLM comparison on finished cases. |
 | `claim_to_fame/feedback.py`, `learn.py` | Settlement reconciliation, loss bounds, calibration, contextual recall and private artifacts. |
 | `claim_to_fame/tuning.py`, `tune.py` | A_MULT/SIGMA replay against the field's real a and b, guarded update of `out/params.json`. |
