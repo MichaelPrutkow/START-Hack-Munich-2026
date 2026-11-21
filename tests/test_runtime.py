@@ -13,6 +13,7 @@ from claim_to_fame import pricing
 
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, {"FOCUS_ENABLED": "0", "PRICING_UNCERTAINTY": "0"}))
         self.enterContext(patch.multiple(
             R, POOL=None, TIERS=[], A_MULT=0.85, SIGMA=0.35, DISAGREE=1.5,
         ))
@@ -108,3 +109,98 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(rec["winner"], "rules")
         self.assertTrue(rec["ok"])
         self.assertEqual(self.sent, [("provisional", {1: (130, 130), 4: (60, 60)})])
+
+    def test_disputed_deep_line_keeps_consistent_fast_and_records_real_sources(self):
+        self.prepare_round([R.Tier("fast", 1, "fake", None, 3, 20),
+                            R.Tier("deep", 2, "fake", None, 3, 50)])
+        fast_sent = threading.Event()
+        original = R.submit.side_effect
+        def submit(*args):
+            result = original(*args)
+            if args[-1] == "fast":
+                fast_sent.set()
+            return result
+        R.submit.side_effect = submit
+        def assess(messages, timeout, tier):
+            if tier.name == "deep":
+                self.assertTrue(fast_sent.wait(2))
+            amounts = [100, 100, 100] if tier.name == "fast" else [80, 200, 700]
+            return [{1: {"covered_prob": 1, "t_if_covered": m},
+                     4: {"covered_prob": 1, "t_if_covered": 50 if tier.name == "fast" else 60}}
+                    for m in amounts], {}
+        self.enterContext(patch.object(R, "assess", side_effect=assess))
+        rec = R.play_game(1, time.time(), dry=True)
+        self.assertEqual(rec["line_sources"], {1: "fast", 4: "deep"})
+        self.assertEqual(rec["final_ab"], self.sent[-1][1])
+        self.assertEqual(rec["final_ab"][1][0], 85)
+        self.assertEqual(rec["final_ab"][4][0], 51)
+        self.assertGreater(rec["est"]["deep"][1]["log_spread"], 0)
+        self.assertTrue(rec["dry"])
+        self.assertEqual(rec["campaign"], "2026-11")
+
+    def test_all_invalid_votes_keep_fallback(self):
+        self.prepare_round([R.Tier("fast", 1, "fake", None, 1, 20)])
+        self.enterContext(patch.object(R, "assess", return_value=(
+            [{1: {"covered_prob": float("nan"), "t_if_covered": 100}}], {})))
+        rec = R.play_game(1, time.time(), dry=True)
+        self.assertEqual(rec["winner"], "rules")
+        self.assertEqual(rec["line_sources"], {1: "rules", 4: "rules"})
+        self.assertEqual(rec["final_ab"], self.sent[0][1])
+
+    def test_focus_is_bounded_and_keeps_complete_submission(self):
+        self.enterContext(patch.dict(os.environ, {"FOCUS_ENABLED": "1", "FOCUS_MAX_LINES": "1"}))
+        self.prepare_round([R.Tier("deep", 2, "fake", None, 3, 50)])
+        calls = []
+        def assess(messages, timeout, tier):
+            calls.append((tier.name, timeout, messages))
+            if tier.name == "deep":
+                return [{1: {"covered_prob": 1, "t_if_covered": 500},
+                         4: {"covered_prob": 1, "t_if_covered": 60}} for _ in range(3)], {}
+            return [{1: {"covered_prob": 1, "t_if_covered": 400}} for _ in range(2)], {}
+        self.enterContext(patch.object(R, "assess", side_effect=assess))
+        rec = R.play_game(1, time.time(), dry=True)
+        self.assertEqual([c[0] for c in calls], ["deep", "focus"])
+        self.assertLessEqual(calls[1][1], 12)
+        self.assertIn("1 | Synthetic repair", calls[1][2][1]["content"])
+        self.assertNotIn("4 | Synthetic part", calls[1][2][1]["content"])
+        self.assertEqual(rec["line_sources"], {1: "focus", 4: "deep"})
+        self.assertEqual(rec["final_ab"][4], rec["tiers"]["deep"][4])
+
+    def test_late_llm_result_cannot_replace_submitted_fallback(self):
+        self.prepare_round([R.Tier("deep", 2, "fake", None, 3, 50)])
+        clock = [100.0]
+        self.enterContext(patch.object(R.time, "time", side_effect=lambda: clock[0]))
+        def assess(*args):
+            clock[0] = 200.0
+            return [{1: {"covered_prob": 1, "t_if_covered": 999}}], {}
+        self.enterContext(patch.object(R, "assess", side_effect=assess))
+        rec = R.play_game(1, 100.0, dry=True)
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(rec["winner"], "rules")
+        self.assertEqual(rec["final_ab"], self.sent[0][1])
+
+    def test_shared_groups_cannot_be_partially_updated_through_overlap(self):
+        old = {1: {"shared": 100}, 4: {"shared": 100}, 8: {"shared": None}}
+        new = {1: {"shared": None}, 4: {"shared": 200}, 8: {"shared": 200}}
+        self.assertEqual(R.atomic_selection([1, 4], old, new), set())
+        self.assertEqual(R.atomic_selection([1, 4, 8], old, new), {1, 4, 8})
+        self.assertEqual(R.atomic_selection([1], {1: {"shared": 0}, 4: {"shared": 0}}), set())
+
+    def test_validated_learning_only_applies_to_eligible_pricing(self):
+        self.prepare_round([R.Tier("fast", 1, "fake", None, 3, 20)])
+        state = {"schema_version": 1, "max_game": 3, "created_at": "2026-11-21T00:00:00+00:00"}
+        self.enterContext(patch.object(R.feedback, "load_state", return_value=state))
+        self.enterContext(patch.object(R.feedback, "context_for_items", return_value="past range evidence"))
+        self.enterContext(patch.object(R.feedback, "calibration_for", return_value={
+            "bias": 0.8, "sigma": 0.4, "min_covered_prob": 0.9}))
+        self.enterContext(patch.object(R, "assess", return_value=([
+            {1: {"covered_prob": 1, "t_if_covered": 100},
+             4: {"covered_prob": 1, "t_if_covered": 100, "stated_value": 50}}
+            for _ in range(3)], {})))
+        rec = R.play_game(4, time.time(), dry=True)
+        self.assertEqual(rec["final_ab"][1][0], 68)
+        self.assertEqual(rec["final_ab"][4], (50, 50))
+        self.assertTrue(rec["est"]["fast"][1]["calibration_applied"])
+        self.assertFalse(rec["est"]["fast"][4]["calibration_applied"])
+        self.assertEqual(rec["learning_max_game"], 3)
+        self.assertEqual(rec["learning_version"], 1)

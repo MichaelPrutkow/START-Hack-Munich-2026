@@ -15,8 +15,10 @@ are never printed or logged.
 import argparse
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -31,13 +33,14 @@ from pathlib import Path
 import requests
 
 from claim_to_fame import pricing
+from claim_to_fame import feedback
 from claim_to_fame.invoices import (
     FALLBACK_LINE, FALLBACK_MAX, LINE_END_RE, LINE_RE, STOP_RE, UNIT_RATE, UNITS,
     header_map, norm_unit, num, parse_items, parse_lines, rule_value,
 )
 from claim_to_fame.pricing import apply_shared_caps, ceil_c, floor_c, pos
 from claim_to_fame.prompts import (
-    AMOUNT_RE, CLAUSE_RE, SCHEMA, SYSTEM, build_prompt, policy_amounts,
+    AMOUNT_RE, CLAUSE_RE, SCHEMA, SYSTEM, build_prompt, build_focus_prompt, policy_amounts,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -150,7 +153,11 @@ def submit(gid, ab, deadline, dry, tag):
             log.error("[%s] %s: deadline passed, not sent", gid, tag)
             return False
         try:
-            r = S.put(f"{BASE}/api/games/{gid}/submissions", headers=hdr(), json=body, timeout=5)
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return False
+            r = S.put(f"{BASE}/api/games/{gid}/submissions", headers=hdr(), json=body,
+                      timeout=min(5.0, max(0.05, remaining)))
             if r.ok:
                 ok = echo_ok(body, r.json() if r.content else [], gid)
                 log.info("[%s] %s sent: %d lines, HTTP %d, echo %s",
@@ -375,8 +382,81 @@ def b_mult(p):
     return pricing.b_mult(p, sigma=SIGMA)
 
 
-def price(p, m, stated, cap, fallback):
-    return pricing.price(p, m, stated, cap, fallback, a_mult=A_MULT, sigma=SIGMA)
+def price(p, m, stated, cap, fallback, *, uncertainty=0.0, bias=1.0, sigma=None):
+    return pricing.price(p, m, stated, cap, fallback, a_mult=A_MULT,
+                         sigma=SIGMA if sigma is None else sigma,
+                         uncertainty=uncertainty, bias=bias,
+                         uncertainty_aware=os.environ.get("PRICING_UNCERTAINTY", "0") == "1")
+
+
+def configure_pricing():
+    """Apply loaded environment settings in both runner and offline evaluation."""
+    global A_MULT, SIGMA, DISAGREE
+    values = [float(os.environ.get(k, v)) for k, v in
+              (("A_MULT", A_MULT), ("SIGMA", SIGMA), ("DISAGREE", DISAGREE))]
+    if not all(math.isfinite(v) and v > 0 for v in values) or values[2] < 1:
+        raise ValueError("A_MULT, SIGMA and DISAGREE must be finite and positive")
+    A_MULT, SIGMA, DISAGREE = values
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def strategy_identity():
+    """Identify the estimator/configuration that produced training observations."""
+    config = {"a_mult": A_MULT, "sigma": SIGMA, "disagree": DISAGREE,
+              "aggregation": "median-spread-v1", "selection": "evidence-v1",
+              "uncertainty_pricing": os.environ.get("PRICING_UNCERTAINTY", "0"),
+              "source": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+                         for name in ("runner.py", "claim_to_fame/pricing.py", "claim_to_fame/prompts.py")},
+              "focus": os.environ.get("FOCUS_ENABLED", "1"),
+              "focus_lines": os.environ.get("FOCUS_MAX_LINES", "2"),
+              "focus_budget": os.environ.get("FOCUS_BUDGET", "12"),
+              "tiers": {t.name: {"model": t.model, "votes": t.votes, "extra": t.extra}
+                        for t in TIERS}}
+    return {"prompt_hash": digest({"system": SYSTEM, "schema": SCHEMA}),
+            "config_hash": digest(config), "config": config}
+
+
+def estimate_quality(estimate):
+    """A conservative consistency heuristic, not a measured probability of accuracy."""
+    n = max(1, estimate.get("valid_count", 1))
+    invalid = estimate.get("invalid_count", 0) / max(n + estimate.get("invalid_count", 0), 1)
+    spread = estimate.get("log_spread", 0.0) + estimate.get("p_spread", 0.0)
+    anchors = sum(bool(a.get("conflicting") or a.get("invalid"))
+                  for a in estimate.get("anchor_validity", {}).values())
+    return spread + invalid + 0.25 * anchors + 0.12 / math.sqrt(n)
+
+
+def prefer_estimate(candidate, previous, *, level, previous_level):
+    if not candidate.get("valid_count", 0):
+        return False
+    if previous is None:
+        return True
+    new_q, old_q = estimate_quality(candidate), estimate_quality(previous)
+    # A larger model gets only a tie break, not the right to replace a much
+    # more consistent result. A single focused vote cannot look perfectly certain.
+    if level > previous_level:
+        return new_q <= old_q + 0.15
+    return new_q + 0.15 < old_q
+
+
+def atomic_selection(selected, *versions):
+    """Retain whole old/new shared-cap groups, including transitive overlaps."""
+    groups = {}
+    for version in versions:
+        for i, e in version.items():
+            if e.get("shared") is not None:
+                groups.setdefault(e["shared"], set()).add(i)
+    selected = set(selected)
+    while True:
+        previous = selected.copy()
+        for group in groups.values():
+            if group.intersection(selected) and not group.issubset(selected):
+                selected.difference_update(group)
+        if selected == previous:
+            return selected
 
 
 # ---------------------------------------------------------------- one round
@@ -405,47 +485,119 @@ def play_game(gid, start, dry=False, use_llm=True):
     d = decrypt(gid, key)
     items = parse_items(d)
     fb = {i: rule_value(it) for i, it in items.items()}
-    prov_ok = submit(gid, {i: (v, v) for i, v in fb.items()}, deadline, dry, "provisional")
+    rules = {i: (floor_c(v), ceil_c(v)) for i, v in fb.items()}
+    prov_ok = submit(gid, rules, deadline, dry, "provisional")
     t_prov = time.time() - t_key
     log.info("[%s] %d lines, provisional after %.1fs", gid, len(items), t_prov)
-
-    rules = {i: (floor_c(v), ceil_c(v)) for i, v in fb.items()}
-    best = {"level": 0, "ab": rules, "tier": "rules"}
-    out, usage, slock, est = {"rules": rules}, {}, threading.Lock(), {}
+    identity = strategy_identity()
+    policy, desc = read_text(d, "policy*.txt"), read_text(d, "description*.txt")
+    state_path = Path(os.environ.get("LEARNING_FILE", str(OUT / "learning.json")))
+    state = feedback.load_state(state_path, before_game=gid) if gid else None
+    history = feedback.context_for_items(state, items, policy) if state else ""
+    best = {"ab": rules, "tier": "rules", "est": {},
+            "sources": {i: "rules" for i in items}, "levels": {i: 0 for i in items}}
+    out, usage, est, vote_log = {"rules": rules}, {}, {}, {}
+    slock, closed = threading.Lock(), threading.Event()
     log_prices(gid, "rules", items, rules)
+
+    def candidate(tier, voices, selected_items):
+        summaries = {i: pricing.estimate_votes([v[i] for v in voices if i in v], disagree=DISAGREE)
+                     for i in selected_items}
+        summaries = {i: e for i, e in summaries.items() if e["valid_count"] > 0}
+        raw = {i: tuple(e[k] for k in ("p", "m", "stated", "cap", "shared"))
+               for i, e in summaries.items()}
+        # Focused reviews carry the other lines into shared-cap allocation.
+        # Never reinterpret a partial group as a standalone policy limit.
+        all_raw = dict(raw)
+        with slock:
+            previous = dict(best["est"])
+        for i, e in previous.items():
+            if i not in all_raw:
+                all_raw[i] = (e["p"], e.get("m_raw", e["m"]), e.get("stated_raw", e.get("stated")),
+                              e.get("cap_raw", e.get("cap")), e.get("shared"))
+        adjusted = apply_shared_caps(all_raw)
+        calibration = feedback.calibration_for(
+            state, tier.name, model=tier.model, prompt_hash=identity["prompt_hash"],
+            config_hash=identity["config_hash"]) if state else None
+        part, details = {}, {}
+        for i, summary in summaries.items():
+            p, m, stated, cap = adjusted[i]
+            # Group-affecting focused corrections need a full-case pass. Keeping
+            # the previous complete allocation is safer than changing one share.
+            if set(selected_items) != set(items) and (summary.get("shared") is not None or
+                    previous.get(i, {}).get("shared") is not None):
+                continue
+            eligible = (calibration and p >= calibration.get("min_covered_prob", 0.9)
+                        and m > 0 and stated is None and cap is None and summary.get("shared") is None)
+            bias = calibration["bias"] if eligible else 1.0
+            sigma = calibration["sigma"] if eligible else SIGMA
+            detail = {**summary, "p": p, "m": m, "m_raw": summary["m"],
+                      "stated": stated, "stated_raw": summary["stated"], "cap": cap,
+                      "cap_raw": summary["cap"],
+                      "calibration_applied": bool(eligible), "bias": bias, "sigma": sigma,
+                      "uncertainty_applied": os.environ.get("PRICING_UNCERTAINTY", "0") == "1"}
+            part[i] = price(p, m, stated, cap, fb[i], uncertainty=summary["log_spread"],
+                            bias=bias, sigma=sigma)
+            details[i] = detail
+        return part, details
+
+    def publish(tier, part, details, voices, used):
+        with slock:
+            if closed.is_set() or time.time() >= deadline:
+                return False
+            out[tier.name], est[tier.name], usage[tier.name] = part, details, used
+            vote_log[tier.name] = voices
+            log_prices(gid, tier.name, items, part, details)
+            selected = [i for i in part if prefer_estimate(details[i], best["est"].get(i),
+                         level=tier.level, previous_level=best["levels"][i])]
+            # A shared-cap group is an atomic decision: never mix two allocations.
+            selected = atomic_selection(selected, best["est"], details)
+            if not selected:
+                log.info("[%s] %s kept for evaluation; current estimates retained", gid, tier.name)
+                return False
+            merged = {**best["ab"], **{i: part[i] for i in selected}}
+            if not submit(gid, merged, deadline, dry, tier.name):
+                return False
+            best["ab"], best["tier"] = merged, tier.name
+            for i in selected:
+                best["est"][i], best["sources"][i], best["levels"][i] = details[i], tier.name, tier.level
+            return True
 
     def run_tier(tier, msgs):
         try:
             budget = min(tier.budget - (time.time() - t_key), deadline - time.time() - 3)
-            voices, usage[tier.name] = assess(msgs, budget, tier)
-            part, raw = {}, {}
-            for i in items:
-                votes = [v[i] for v in voices if i in v]
-                if votes:
-                    raw[i] = aggregate(votes)
-            for i, agg in apply_shared_caps(raw).items():
-                est.setdefault(tier.name, {})[i] = {"p": round(agg[0], 3), "m": round(agg[1], 2),
-                                                    "m_raw": round(raw[i][1], 2), "stated": agg[2],
-                                                    "cap": agg[3], "shared": raw[i][4]}
-                part[i] = price(*agg, fb[i])
-            out[tier.name] = part
-            with slock:                             # ordered: a slower lower tier never overwrites
-                if tier.level < best["level"]:
-                    log.info("[%s] %s done after %s: not sent", gid, tier.name, best["tier"])
-                    return
-                merged = {**best["ab"], **part}
-                if submit(gid, merged, deadline, dry, tier.name):
-                    best.update(level=tier.level, ab=merged, tier=tier.name)
-            log.info("[%s] %s (%s): %d/%d lines, %.1fs after key, tokens %s", gid, tier.name, tier.model,
-                     len(part), len(items), time.time() - t_key, usage[tier.name])
-            log_prices(gid, tier.name, items, part, est.get(tier.name))
+            if budget <= 0:
+                return
+            voices, used = assess(msgs, budget, tier)
+            part, details = candidate(tier, voices, items)
+            publish(tier, part, details, voices, used)
+            log.info("[%s] %s (%s): %d/%d lines, %.1fs after key, tokens %s", gid,
+                     tier.name, tier.model, len(part), len(items), time.time() - t_key, used)
+            # A bounded second look uses remaining time only after a complete
+            # submission exists; no deadline extension and no extra submitter.
+            if tier.name != "deep" or os.environ.get("FOCUS_ENABLED", "1") == "0" or closed.is_set():
+                return
+            budget = min(float(os.environ.get("FOCUS_BUDGET", "12")), deadline - time.time() - 5)
+            if budget < 8:
+                return
+            focused_items = pricing.select_focus_items(
+                {i: items[i] for i in details if details[i].get("shared") is None}, details,
+                limit=int(os.environ.get("FOCUS_MAX_LINES", "2")))
+            # Reassess shared groups only with full-case calls, never partial caps.
+            if not focused_items:
+                return
+            focused = Tier("focus", tier.level + 0.5, tier.model, tier.extra.get("reasoning_effort"), 2, budget)
+            fm = build_focus_prompt(policy, desc, focused_items, details, historical_context=history)
+            fv, fu = assess(fm, budget, focused)
+            fp, fe = candidate(focused, fv, focused_items)
+            publish(focused, fp, fe, fv, fu)
         except NoKeys:
             log.error("[%s] %s: all OpenAI keys exhausted", gid, tier.name)
         except Exception as e:
             log.error("[%s] %s error %s", gid, tier.name, type(e).__name__)
 
     if use_llm and POOL.current():
-        msgs = build_prompt(read_text(d, "policy*.txt"), read_text(d, "description*.txt"), items)
+        msgs = build_prompt(policy, desc, items, historical_context=history)
         threads = [threading.Thread(target=run_tier, args=(t, msgs), daemon=True) for t in TIERS]
         for th in threads:
             th.start()
@@ -453,12 +605,25 @@ def play_game(gid, start, dry=False, use_llm=True):
             th.join(timeout=max(0.0, deadline - time.time()))
     elif use_llm:
         log.error("[%s] no usable OpenAI key: rule-based submission stands", gid)
-    final = best["ab"]
-    rec = {"game": gid, "lines": len(items), "winner": best["tier"], "ok": prov_ok or best["level"] > 0,
-           "t_provisional": round(t_prov, 2), "t_end": round(time.time() - t_key, 2), "usage": usage,
-           "models": {t.name: t.model for t in TIERS}, "items": items, "tiers": out,
-           "est": est, "a_mult": A_MULT, "sigma": SIGMA}
-    jlog("rounds.jsonl", rec)
+    with slock:
+        closed.set()
+        final = best["ab"].copy()
+        log_prices(gid, "final", items, final, best["est"])
+        # Serialize the actually stored merged submission, not just the last tier.
+        rec = {"game": gid, "campaign": "2026-11", "lines": len(items), "winner": best["tier"],
+               "ok": prov_ok or best["tier"] != "rules", "dry": dry,
+               "t_provisional": round(t_prov, 2), "t_end": round(time.time() - t_key, 2),
+               "usage": dict(usage), "models": {t.name: t.model for t in TIERS},
+               "items": items, "tiers": dict(out), "est": dict(est), "votes": dict(vote_log),
+               "final_ab": final, "line_sources": best["sources"].copy(),
+               "a_mult": A_MULT, "sigma": SIGMA, **identity,
+               "policy_hash": hashlib.sha256(policy.encode()).hexdigest(),
+               "learning_version": state.get("schema_version") if state else None,
+               "learning_max_game": state.get("max_game") if state else None,
+               "learning_created_at": state.get("created_at") if state else None}
+        if "focus" in est:
+            rec["models"]["focus"] = next((t.model for t in TIERS if t.name == "deep"), "")
+        jlog("rounds.jsonl", rec)
     log.info("[%s] DONE winner %s, sum a %.0f", gid, best["tier"], sum(a for a, _ in final.values()))
     return rec
 
@@ -535,8 +700,7 @@ def main():
     ap.add_argument("--no-llm", action="store_true", help="rules only")
     args = ap.parse_args()
     load_env()
-    A_MULT, SIGMA = float(os.environ.get("A_MULT", A_MULT)), float(os.environ.get("SIGMA", SIGMA))
-    DISAGREE = float(os.environ.get("DISAGREE", DISAGREE))
+    configure_pricing()
     TIERS = build_tiers()
     POOL = KeyPool()
     setup_logging()

@@ -27,7 +27,9 @@ source .venv/bin/activate && python3 runner.py --check && caffeinate -i python3 
 
 ## Each round
 
-Key at T+0 → decrypt (7z/7zz, else pyzipper) → parse the invoice PDF (all pages, wrapped lines) → provisional rule-based submission → fast and deep LLM tiers in parallel (structured output: per line coverage probability p and fair total m) → final submission with echo check. Pricing per line: `a = A_MULT × m`; `b` such that `p · P(t ≥ b) = 2/3` (log-normal spread `SIGMA`), `b = 0` if `p ≤ 2/3`. OpenAI key cascade: 401/insufficient_quota disables a key, 429 only for the round. Without LLM the rule submission stands, never 0/0.
+Key at T+0 → decrypt → parse all invoice pages → complete provisional submission → fast and deep models in parallel → complete merged submission with echo check. Every line retains its source tier. The larger model wins ties when consistency is comparable; a substantially more disputed answer does not automatically replace a consistent one. After the deep answer, at most two expensive/disputed lines receive a focused two-vote recheck if at least eight seconds remain for inference. Its budget is twelve seconds and never extends the submission deadline. Shared-cap groups are updated together.
+
+Votes retain their median, amount spread, coverage dispersion and document-anchor disagreements. Disagreement no longer selects the two highest estimates. Baseline pricing remains `a = A_MULT × m`, with `b` at the existing `p · P(t ≥ b) = 2/3` threshold. Document amounts and individual/shared limits apply deterministically. The optional spread-based price adjustment is off until evaluated (`PRICING_UNCERTAINTY=0`). API-key handling is unchanged.
 
 ## Analyse and test (read-only, safe on any machine)
 
@@ -41,12 +43,44 @@ uv run python test_runner.py
 uv run watch.py --team chineseModels
 ```
 ```bash
-uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3
+uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3 --old-ref 10ad63b --holdout-from 4
 ```
 
 `watch.py` reports every finished game from the leaderboard (net, rank, our a against the t interval, no LLM) and raises a macOS alarm if we apparently did not submit.
 
-`eval_cases.py` replays the LLM step (Git `HEAD` vs current by default; select a baseline with `--old-ref <commit>`) on finished games and scores it against the leaderboard brackets; it submits nothing, waits outside game windows, but spends OpenAI tokens. Historical code is loaded with the domain modules from the same commit, so both single-file and modular revisions work. `calibrate.py` reads the public leaderboard once per finished game (1 request/s, cached in `out/leaderboard/`; organizers allowed scraping but not hammering), derives the t interval per line, and with `out/rounds.jsonl` fits t/m with a censored MLE (one-sided brackets included; `--tier fast|deep` picks whose estimate) and backtests `A_MULT` × `SIGMA`.
+`eval_cases.py` requires `--old-ref <commit>` or `--skip-old`. It scores actual returned prices, including document values and caps, and prints conservative payoff bounds. Their midpoint is not expected profit. Historical code/lazy imports are isolated and model/vote budgets match. Failed or incomplete comparisons are excluded. This single-tier replay does not simulate live timing or merged tiers. It submits nothing and waits outside game windows, but spends OpenAI tokens. Choose the holdout boundary before inspecting results; reusing already-tuned games is descriptive, not independent validation.
+
+`calibrate.py` fetches each completed game once (1 request/s, cached in `out/leaderboard/`), derives censored fair-price intervals and supports `--holdout-from <game>` for parameter comparisons. Accepted payments are not assumed to equal original demands when a payment cap could have applied.
+
+## Learning between rounds
+
+On **Philip's runner machine**, open a second terminal for the watcher (it does not submit):
+
+```bash
+uv run watch.py --team chineseModels --learn
+```
+
+After reporting a completed game, it joins public settlements with local `out/rounds.jsonl`, atomically writes `out/learning.json`, and produces `out/learning-report.md`. The runner reads this artifact at the next game. A watcher on another machine can still monitor, but needs Philip's round logs to build learning.
+
+Rebuild from cached data without network or LLM requests:
+
+```bash
+uv run learn.py --team chineseModels
+```
+
+`--refresh` explicitly fetches missing completed public games. `--before-game N` excludes game N and later data. The report separates reviewer overpayment, wrongful-rejection penalties and bounded issuer opportunity losses, grouped by round and actual source tier.
+
+Calibration stays in shadow until there are at least six games, sixteen confirmed-covered training lines and eight later validation lines. Validation includes all otherwise eligible high-coverage predictions, including coverage mistakes. A frozen candidate must improve the held-out conservative net lower bound by at least 5% over actual baseline net. Only matching model/prompt/configuration cohorts qualify. Stale, malformed, future-game or unreconciled data are ignored. Already-calibrated and optional uncertainty-adjusted observations are excluded from the baseline fit.
+
+Recall supplies whole-line fair-price **ranges** only for similar descriptions with the same policy, quantity and unit. It is not a market unit-rate lookup and never copies old coverage into a new case. No August records are used. Legacy logs without `final_ab` and `line_sources` are excluded rather than guessing a merged submission.
+
+New raw votes, actual submitted prices, per-line sources and model/prompt/configuration/learning provenance remain in ignored `out/`. Implementation tests do not establish a live profit improvement. Current shared-cap schema identifies groups by amount; distinct clauses with equal numeric limits remain a known limitation.
+
+## Applying this update
+
+Run the offline suite, merge this branch with Michael's current changes, and restart **only Philip's runner**, between game windows. API-key code is unchanged. Keep the previous checkout available for rollback, and start the learning watcher on Philip's machine as above. `FOCUS_ENABLED=0` disables the optional follow-up call; keep `PRICING_UNCERTAINTY=0` until a chronological comparison supports enabling it. This update never overwrites `.env`.
+
+The one-page submission text and three-minute pitch with Q&A are in [`writeup/ONE_PAGE.md`](writeup/ONE_PAGE.md) and [`writeup/PITCH.md`](writeup/PITCH.md). Their game-8 numbers are a dated snapshot, not final standings.
 
 ## Code layout
 
@@ -59,6 +93,7 @@ uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3
 | `calibrate.py` | Read-only leaderboard analysis and calibration. |
 | `watch.py` | Read-only per-game reports and missing-submission alarms. |
 | `eval_cases.py` | Historical/current LLM comparison on finished cases. |
+| `claim_to_fame/feedback.py`, `learn.py` | Settlement reconciliation, loss bounds, calibration, contextual recall and private artifacts. |
 | `tests/` | Offline domain, round orchestration and historical-import regression tests. |
 | `test_runner.py` | Runs the entire offline suite using Python's standard-library `unittest`. |
 

@@ -23,6 +23,18 @@ OUT = Path(__file__).resolve().parent / "out"
 LATE = 15 * 60          # alarm if a game is not completed this long after its start
 
 
+def update_learning(team, rounds, learning_file):
+    """Runs after settlement publication, never inside the submitting runner."""
+    if not rounds.exists():
+        print("Learning skipped: rounds.jsonl is absent; use --learn on the runner machine.", flush=True)
+        return
+    from claim_to_fame.feedback import build_state, write_state
+    state = build_state(rounds, C.CACHE, team)
+    write_state(state, learning_file, report_path=learning_file.with_name("learning-report.md"))
+    ready = sum(c["status"] == "validated" for c in state["calibrations"])
+    print(f"Learning updated: {len(state['games'])} reconciled games; {ready} validated calibrations.", flush=True)
+
+
 def alarm(title, text, loud):
     print(f"\a{'!!! ' if loud else ''}{title}: {text}", flush=True)
     script = f'display notification {json.dumps(text)} with title {json.dumps(title)}' + \
@@ -88,11 +100,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--team", default="chineseModels")
     ap.add_argument("--once", type=int, help="report this finished game and exit")
+    ap.add_argument("--learn", action="store_true", help="update private learning from local runner logs after reporting")
+    ap.add_argument("--rounds", type=Path, default=OUT / "rounds.jsonl")
+    ap.add_argument("--learning-file", type=Path, default=OUT / "learning.json")
     args = ap.parse_args()
     OUT.mkdir(exist_ok=True)
     if args.once is not None:
         r = report(args.once, args.team)
-        return show(r, args.team) if r else print(f"game {args.once}: no transactions yet")
+        if r:
+            show(r, args.team)
+            if args.learn:
+                update_learning(args.team, args.rounds, args.learning_file)
+        else:
+            print(f"game {args.once}: no transactions yet")
+        return
     done = set()
     try:
         done = {json.loads(l)["game"] for l in (OUT / "watch.log").read_text().splitlines()}
@@ -100,6 +121,8 @@ def main():
         pass
     alarmed = set()
     print(f"watching {args.team}; already reported: {sorted(done)[-5:]}", flush=True)
+    if args.learn:
+        update_learning(args.team, args.rounds, args.learning_file)
     while True:
         try:
             G = games()
@@ -120,6 +143,11 @@ def main():
                 if r:
                     show(r, args.team)
                     done.add(gid)
+                    if args.learn:
+                        try:
+                            update_learning(args.team, args.rounds, args.learning_file)
+                        except Exception as e:
+                            print(f"Learning update failed: {type(e).__name__}; prior artifact retained.", flush=True)
             elif now - start > LATE and gid not in alarmed:
                 alarm(f"Spiel {gid} nicht abgeschlossen", "Leaderboard zeigt das Spiel 15 min nach Start nicht als fertig.", True)
                 alarmed.add(gid)
