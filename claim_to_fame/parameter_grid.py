@@ -4,6 +4,8 @@ from collections import Counter
 from .pricing import price
 from .recall import apply_cap
 
+WINDOW_SIZE = 20
+
 ALPHAS = tuple(round(.5 + i * .05, 2) for i in range(13))
 SIGMAS = (.2, .3, .35, .5, .65, .8, 1., 1.2, 1.4)
 
@@ -29,7 +31,7 @@ def replay(rec, line, alpha, sigma):
 def evaluate(prepared, window, team, checkpoint=None):
     """prepared contains only fully reconciled games; window also includes missing logs."""
     import calibrate as C
-    window = sorted(set(window))[-10:]
+    window = sorted(set(window))[-WINDOW_SIZE:]
     selected = [entry for entry in prepared if entry[0]['game'] in window]
     combos = {(a, s) for a in ALPHAS for s in SIGMAS}
     for rec, _, _, _ in selected:
@@ -111,7 +113,7 @@ def evaluate(prepared, window, team, checkpoint=None):
                    key=lambda r: (-r['lower'], r['a_mult'], r['sigma']))
         per_game.append({**game, 'best': best if game['replayed_lines'] else None})
     return {'status': 'retrospective_only' if usable else 'no_replayable_estimates',
-            'window_games': window, 'missing_games': sorted(set(window)-{g['game'] for g in game_info}),
+            'window_size': WINDOW_SIZE, 'window_games': window, 'missing_games': sorted(set(window)-{g['game'] for g in game_info}),
             'replayed_lines': sum(g['replayed_lines'] for g in game_info),
             'fixed_lines': sum(g['fixed_lines'] for g in game_info),
             'combination_count': len(scores), 'best': ranked[0] if usable else None,
@@ -121,7 +123,7 @@ def evaluate(prepared, window, team, checkpoint=None):
 def report(grid):
     if not grid:
         return []
-    lines = ['', '## Retrospective A_MULT / SIGMA grid (last 10 completed cached games)', '',
+    lines = ['', f"## Retrospective A_MULT / SIGMA grid (last {grid.get('window_size', 10)} completed cached games)", '',
              f"Games: {grid['window_games']}; missing logs/reconciliation: {grid['missing_games']}; "
              f"replayed lines: {grid['replayed_lines']}; unchanged lines: {grid['fixed_lines']}.",
              'Original estimates, coverage, bias, policy caps and historical recall stay fixed. Opponents stay fixed.',

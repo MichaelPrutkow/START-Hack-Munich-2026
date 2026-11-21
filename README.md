@@ -181,7 +181,7 @@ runner between rounds **before pulling**, then restart exactly one instance.
 ### Parametervergleich nach jeder abgeschlossenen Runde
 
 Die automatische Lernschleife berechnet außerhalb des Spielfensters einen rückblickenden
-Vergleich für die letzten zehn vollständig gecachten Spiele. `LEARNING_AUTO` muss aktiviert
+Vergleich für die letzten zwanzig vollständig gecachten Spiele. `LEARNING_AUTO` muss aktiviert
 sein; `AUTO_TUNE=0` verhindert diese Auswertung nicht. Keine zusätzlichen LLM-Aufrufe.
 Das Raster enthält A_MULT 0,50–1,10 in 0,05-Schritten und SIGMA
 0,20 / 0,30 / 0,35 / 0,50 / 0,65 / 0,80 / 1,00 / 1,20 / 1,40,

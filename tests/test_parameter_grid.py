@@ -55,9 +55,9 @@ class GridTests(unittest.TestCase):
         self.assertEqual(result['exclusions'][0]['reason'], 'baseline_replay_mismatch')
 
     def test_window_does_not_backfill_missing_recent_games(self):
-        result = G.evaluate([self.prepared(i) for i in range(1, 5)], range(1, 13), 'us')
-        self.assertEqual(result['window_games'], list(range(3, 13)))
-        self.assertEqual(result['missing_games'], list(range(5, 13)))
+        result = G.evaluate([self.prepared(i) for i in range(1, 5)], range(1, 23), 'us')
+        self.assertEqual(result['window_games'], list(range(3, 23)))
+        self.assertEqual(result['missing_games'], list(range(5, 23)))
         self.assertEqual([g['game'] for g in result['per_game']], [3, 4])
 
     def test_deadline_propagates(self):
@@ -102,12 +102,13 @@ class GridIntegrationTests(unittest.TestCase):
     add = fixtures.FeedbackTests.add
     state = fixtures.FeedbackTests.state
     def test_grid_in_state_report_and_cutoff(self):
-        for gid in range(1, 13):
+        for gid in range(1, 23):
             rec, data = fixture(gid)
             self.add(rec, data)
-        state = self.state(before_game=12)
-        self.assertEqual(state['parameter_grid']['window_games'], list(range(2, 12)))
+        state = self.state(before_game=22)
+        self.assertEqual(state['parameter_grid']['window_games'], list(range(2, 22)))
         self.assertIsNotNone(state['parameter_grid']['best'])
-        self.assertIn('Retrospective A_MULT / SIGMA', F.render_report(state))
+        self.assertIn('last 20 completed cached games', F.render_report(state))
+        self.assertEqual(state['parameter_grid']['window_size'], 20)
         F.write_state(state, self.root / 'grid.json')
-        self.assertIsNotNone(F.load_state(self.root / 'grid.json', 12, now=NOW))
+        self.assertIsNotNone(F.load_state(self.root / 'grid.json', 22, now=NOW))
