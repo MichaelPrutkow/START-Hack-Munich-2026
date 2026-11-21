@@ -61,6 +61,25 @@ def test_price_rule():
         assert math.isfinite(x) and x >= 0
 
 
+def test_shared_cap_pro_rata():
+    # three lines share one limit of 500 (sum 680 -> scale 500/680); an uncovered line is untouched
+    aggs = {1: (0.9, 180.0, None, None, 500.0), 2: (1.0, 320.0, None, None, 500.0),
+            3: (1.0, 180.0, None, None, 500.0), 4: (0.2, 100.0, None, None, 500.0),
+            5: (1.0, 50.0, None, None, None)}
+    out = R.apply_shared_caps(aggs)
+    assert abs(sum(out[i][1] for i in (1, 2, 3)) - 500.0) < 1e-6, out
+    assert out[4][1] == 100.0 and out[5][1] == 50.0
+    # not binding -> unchanged
+    assert R.apply_shared_caps({1: (1.0, 100.0, None, None, 5000.0)})[1][1] == 100.0
+
+
+def test_policy_amounts():
+    pol = "2.3.3 Overvoltage\nsub-limit of EUR 5,000 per event.\n\n5.2.4 Lost water\ncapped at [amount].\n\n" \
+          "2.6.8 End of life\nbelow 80 per cent of design capacity."
+    got = R.policy_amounts(pol)
+    assert len(got) == 2 and got[0].startswith("[2.3.3]") and got[1].startswith("[2.6.8]"), got
+
+
 if __name__ == "__main__":
     for name, f in list(globals().items()):
         if name.startswith("test_"):

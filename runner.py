@@ -24,7 +24,7 @@ CASES, OUT = ROOT / "cases", ROOT / "out"
 BASE = "https://c2f.public.quantco.cloud"
 ROUND_SECONDS = 60          # submission window after start_time
 SAFETY = 4                  # stop writing this many seconds before the window closes
-DISAGREE = 1.5              # max/min ratio of votes counted as disagreement
+DISAGREE = float(os.environ.get("DISAGREE", "1.5"))  # max/min vote ratio that leans high (August: +81k); 99 = off
 log = logging.getLogger("c2f")
 
 
@@ -359,7 +359,7 @@ def build_tiers():
     tiers = [Tier("fast", 1, env("FAST_MODEL", "gpt-5.6-terra"), env("FAST_REASONING", "none"), int(env("FAST_VOTES", "3")), float(env("FAST_BUDGET", "20")))]
     if env("DEEP_MODEL", "gpt-6.2-astra").lower() != "off":
         tiers.append(Tier("deep", 2, env("DEEP_MODEL", "gpt-6.2-astra"), env("DEEP_REASONING", "high"),
-                          int(env("DEEP_VOTES", "1")), float(env("DEEP_BUDGET", "50"))))
+                          int(env("DEEP_VOTES", "3")), float(env("DEEP_BUDGET", "50"))))
     return tiers
 
 
@@ -401,13 +401,15 @@ def llm_call(messages, n, tier, timeout=20.0):
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["items"], "properties": {
     "items": {"type": "array", "items": {
         "type": "object", "additionalProperties": False,
-        "required": ["index", "covered_prob", "t_if_covered", "stated_value", "stated_cap", "clause"],
+        "required": ["index", "clause", "covered_prob", "t_if_covered", "stated_value", "stated_cap",
+                     "shared_cap"],
         "properties": {"index": {"type": "integer"},
+                       "clause": {"type": "string"},          # first: the model reasons before the numbers
                        "covered_prob": {"type": "number"},
                        "t_if_covered": {"type": "number"},
                        "stated_value": {"type": ["number", "null"]},
                        "stated_cap": {"type": ["number", "null"]},
-                       "clause": {"type": "string"}}}}}}
+                       "shared_cap": {"type": ["number", "null"]}}}}}}
 
 SYSTEM = """You review insurance claims. You get the policy, the damage description and
 the line items of an invoice. For every line, judge as a claims expert would whether it is
@@ -420,15 +422,46 @@ Fields per line:
   covered, at usual German market rates. Always a realistic positive amount, even when
   covered_prob is low.
 - stated_value: an amount the case documents give for exactly this line, else null.
-- stated_cap: a policy limit that caps this line, else null.
-- clause: the policy clause you rely on (short), or "".
+- shared_cap: a policy limit that several lines share TOGETHER (per event, in the aggregate,
+  across items, trades or invoices), else null. Give the full limit on every line it applies to
+  and do NOT reduce t_if_covered for it: the code splits it pro rata.
+- stated_cap: a limit for this line ALONE, else null.
+- clause: the policy clause(s) and the rule you apply (short), or "".
+How to get t_if_covered: start from the usual market price of the line, then apply every rule
+the policy states for it: exclusions, proportional reductions (e.g. "one half" when a required
+device or duty was missing, as established by the description), no betterment, uneconomic repair
+(never more than an equivalent new unit), and caps for this line alone.
+- No new-for-old deduction unless the policy pays current or market value.
+- Betterment or upgrade: the original pre-loss standard is owed, a positive amount, not 0.
+- Preventive work or maintenance without confirmed damage is not owed.
+- Values in square brackets such as [amount] or [percentage] are unknown schedule values:
+  never invent a number for them (no guessed deductible).
+- Amounts in the damage description (purchase price, what the repairs came to, "most of it for
+  ...") are hard anchors for the lines they concern.
 Return one entry for every invoice index."""
+
+
+AMOUNT_RE = re.compile(r"(?:EUR|€)\s?\d[\d.,]*|\d[\d.,]*\s?(?:EUR|€)|\d+(?:[.,]\d+)?\s?(?:per ?cent|%)", re.I)
+CLAUSE_RE = re.compile(r"^(\d+(?:\.\d+)+)\s")
+
+
+def policy_amounts(policy, limit=10):
+    """Every paragraph of the policy that states a concrete amount or percentage, with its clause."""
+    out, clause = [], ""
+    for para in re.split(r"\n\s*\n", policy):
+        m = CLAUSE_RE.match(para.strip())
+        clause = m[1] if m else clause
+        if AMOUNT_RE.search(para) and len(out) < limit:
+            out.append(f"[{clause}] " + " ".join(para.split()))
+    return out
 
 
 def build_prompt(policy, desc, items):
     lines = "\n".join(f"{i} | {it['description']} | {it['quantity']:g} | {it['unit']}"
                       for i, it in sorted(items.items()))
+    amounts = "\n".join(f"- {x}" for x in policy_amounts(policy)) or "- none"
     user = f"## POLICY\n{policy}\n\n## DAMAGE DESCRIPTION\n{desc}\n\n" \
+           f"## CONCRETE AMOUNTS IN THE POLICY (extracted by code, check which lines they cap)\n{amounts}\n\n" \
            f"## INVOICE LINE ITEMS (index | description | quantity | unit)\n{lines}\n"
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
 
@@ -501,7 +534,7 @@ def pos(x):
 
 
 def aggregate(votes):
-    """votes for ONE line -> (p, m, stated, cap)."""
+    """votes for ONE line -> (p, m, stated, cap, shared)."""
     p = statistics.median(min(max(float(v.get("covered_prob") or 0), 0.0), 1.0) for v in votes)
     vals = sorted(x for x in (pos(v.get("t_if_covered")) for v in votes) if x)
     m = 0.0
@@ -515,7 +548,26 @@ def aggregate(votes):
     def majority(key):                              # only trust a stated value most votes report
         xs = [x for x in (pos(v.get(key)) for v in votes) if x]
         return statistics.median(xs) if len(xs) * 2 > len(votes) else None
-    return p, m, majority("stated_value"), majority("stated_cap")
+    return p, m, majority("stated_value"), majority("stated_cap"), majority("shared_cap")
+
+
+def apply_shared_caps(aggs):
+    """aggs {i: (p, m, stated, cap, shared)} -> same without shared, values scaled pro rata where
+    the lines that share one limit add up to more than it (policy wording: applied rateably)."""
+    groups = {}
+    for i, (p, m, stated, cap, shared) in aggs.items():
+        if shared and p > 0.5:
+            groups.setdefault(round(shared, 2), []).append(i)
+    out = {i: (p, m, stated, cap) for i, (p, m, stated, cap, _) in aggs.items()}
+    for limit, idx in groups.items():
+        total = sum(min(out[i][2] or out[i][1], out[i][3] or math.inf) for i in idx)
+        if total > limit > 0:
+            f = limit / total
+            for i in idx:
+                p, m, stated, cap = out[i]
+                out[i] = (p, m * f, stated * f if stated else stated, cap)
+            log.info("shared cap %.2f on lines %s: sum %.2f -> scale %.3f", limit, idx, total, f)
+    return out
 
 
 # a and b relative to m (our median of t), from the official payoff table:
@@ -567,14 +619,16 @@ def play_game(gid, start, dry=False, use_llm=True):
         try:
             budget = min(tier.budget - (time.time() - t_key), deadline - time.time() - 3)
             voices, usage[tier.name] = assess(msgs, budget, tier)
-            part = {}
+            part, raw = {}, {}
             for i in items:
                 votes = [v[i] for v in voices if i in v]
                 if votes:
-                    agg = aggregate(votes)
-                    est.setdefault(tier.name, {})[i] = {"p": round(agg[0], 3), "m": round(agg[1], 2),
-                                                        "stated": agg[2], "cap": agg[3]}
-                    part[i] = price(*agg, fb[i])
+                    raw[i] = aggregate(votes)
+            for i, agg in apply_shared_caps(raw).items():
+                est.setdefault(tier.name, {})[i] = {"p": round(agg[0], 3), "m": round(agg[1], 2),
+                                                    "m_raw": round(raw[i][1], 2), "stated": agg[2],
+                                                    "cap": agg[3], "shared": raw[i][4]}
+                part[i] = price(*agg, fb[i])
             out[tier.name] = part
             with slock:                             # ordered: a slower lower tier never overwrites
                 if tier.level < best["level"]:
@@ -673,7 +727,7 @@ def run_forever(dry, use_llm):
 
 
 def main():
-    global POOL, TIERS, A_MULT, SIGMA
+    global POOL, TIERS, A_MULT, SIGMA, DISAGREE
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", type=int, help="play this game now (0 = test game)")
     ap.add_argument("--check", action="store_true")
@@ -682,6 +736,7 @@ def main():
     args = ap.parse_args()
     load_env()
     A_MULT, SIGMA = float(os.environ.get("A_MULT", A_MULT)), float(os.environ.get("SIGMA", SIGMA))
+    DISAGREE = float(os.environ.get("DISAGREE", DISAGREE))
     TIERS = build_tiers()
     POOL = KeyPool()
     setup_logging()

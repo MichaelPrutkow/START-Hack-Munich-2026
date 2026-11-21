@@ -126,3 +126,22 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Runner gegen echtes `API_HANDBOOK.md` geprüft (Header, Endpunkte, PUT-Format, Echo über `line_item_index`): passt. Spiel 0 komplett durchgespielt, 4 Positionen, Echo ok.
 - Parser hängt umbrochene Beschreibungszeilen an und nimmt die letzte Zahl+Einheit der Zeile. Preisregel a/b neu (siehe Live-Betrieb), Begründung per Auszahlungssimulation. `calibrate.py` neu, Runner loggt `est` (p, m) je Position.
 - Nächster Schritt: nach 5–10 Spielen `calibrate.py` auf Philips Rechner laufen lassen und `A_MULT`/`SIGMA` aus echten Daten setzen.
+
+### 21.11.2026 14:36 · Claude · Analyse Team 404 (Spiele 1–3)
+
+- Befunde mit Zahlen in `notes/TEAM_404.md` (nur gecachte Leaderboard-Daten, keine neue Anfrage, kein Runner-Code geändert).
+- Kern: 96 % unseres Rückstands auf 404 stammen aus G1 Pos. 1 (unser a = 900 knapp über t, 404 = 780,69 knapp darunter). Mit `A_MULT = 0,85` wäre die Zeile fair gewesen. Unsere Reviewer-Bilanz ist die beste im Feld.
+- Nächster Schritt: auf Philips Mac m für G2 Pos. 1 prüfen; `A_MULT` 0,85 halten, bei Median t/m < 0,95 auf 0,80.
+
+### 21.11.2026 14:58 · Claude · Audit des Algorithmus (nur gelesen)
+
+- Bericht und Patch liegen gitignored unter `out/audit/` (enthalten Falldetails): `AUDIT_2026-11-21.md`, `runner_audit.patch` (gegen `298e11f`, nicht angewendet, `git apply --check` ok, Tests ok in Kopie), `censored_fit.py`.
+- Kern: Rechnungen haben keine Preise, m kommt immer vom LLM. Verluste stammen aus m auf der größten Position, nicht aus p. Gemeinsame (anteilige) Höchstgrenzen über mehrere Positionen kennt das Schema nicht. `calibrate.py` schätzt t/m nur aus beidseitig begrenzten Zeilen (Zensierung); zensiert gerechnet Median t/m ≈ 1,0, log-sd ≈ 0,5. A_MULT 0,85 und SIGMA 0,35 lassen.
+- Nächster Schritt: Patch offline gegen Fälle 1–4 prüfen (eigenes Skript, nicht `runner.py --game`), dann in einer Spielpause auf Philips Mac einspielen.
+- Nachtrag 15:00 [C]: Audit mit August-Notizen (`alte_daten` 03/04/06/07/08/10) abgeglichen, Abschnitt 6 im Bericht. Lean-high-Abschaltung zurückgezogen (August +81 k), Fotos gestrichen (+22 % ohne). Neu im Patch: Fachregeln aus 08 §4 (neu für alt, Betterment positiv, Vorsorge), `calibrate.py --tier fast|deep`. Nächste Messung ohne Token: fast gegen deep auf Philips `rounds.jsonl`.
+
+### 21.11.2026 15:12 · Claude · Prompt v2, Sammelgrenzen, deep 3 Stimmen umgesetzt
+
+- `runner.py`: Klausel vor den Zahlen, Fachregeln im Prompt, Policen-Beträge per Regex am Prompt-Ende, `shared_cap` + `apply_shared_caps` (anteilige Kürzung), `DEEP_VOTES` Default 3, `DISAGREE` per `.env`. `calibrate.py`: zensierte t/m-Schätzung, `--tier`. Neu `eval_cases.py` (Offline-Replay, gibt nichts ab, wartet außerhalb der Spielfenster, kostet Token).
+- Beleg und verworfene Regel: `notes/DECISIONS.md` Zeile 15:10. Tests: `test_runner.py` 6/6, Offline-Smoke-Test von `play_game` (dry, Fake-LLM).
+- Nächster Schritt: Philip `git pull`, in `.env` `DEEP_VOTES=3` setzen (oder Zeile löschen), Neustart zwischen zwei Spielfenstern, danach `calibrate.py --tier deep` beobachten.

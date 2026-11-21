@@ -135,10 +135,28 @@ def backtest(d, us, m, p, alpha, sigma):
     return net
 
 
+def censored_fit(iv):
+    """MLE of log(t/m) ~ N(mu, s) from intervals [lo, hi) on the log scale (hi may be inf).
+    Uses one-sided lines too: dropping them biases the median (August: bias -0.86 measured, +0.07 true)."""
+    N = statistics.NormalDist()
+
+    def ll(mu, s):
+        tot = 0.0
+        for lo, hi in iv:
+            pr = (N.cdf((hi - mu) / s) if hi < math.inf else 1.0) - N.cdf((lo - mu) / s)
+            tot += math.log(max(pr, 1e-12))
+        return tot
+    grid = [(ll(mu / 100, s / 100), mu / 100, s / 100) for mu in range(-100, 101, 2) for s in range(5, 151)]
+    best = max(grid)
+    s_ok = [s for l, _, s in grid if l > best[0] - 2]
+    return best[1], best[2], min(s_ok), max(s_ok)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--team", required=True, help="our team name as on the leaderboard")
     ap.add_argument("--rounds", default=str(Path(__file__).resolve().parent / "out" / "rounds.jsonl"))
+    ap.add_argument("--tier", default="auto", help="auto (deep, else fast) | fast | deep: whose m to evaluate")
     args = ap.parse_args()
     games = [g["id"] for g in get("games", completed_only="true", page_size=1000)["items"] if g["id"] != 0]
     ours = {}
@@ -146,13 +164,14 @@ def main():
         for ln in Path(args.rounds).read_text().splitlines():
             r = json.loads(ln)
             ours[r["game"]] = r
-    ratios, alphas, betas = [], [0.7, 0.8, 0.9, 1.0, 1.1], [0.2, 0.35, 0.5, 0.7]
+    ratios, cens, alphas, betas = [], [], [0.7, 0.8, 0.85, 0.9, 1.0, 1.1], [0.2, 0.35, 0.5, 0.7]
     bt = {(al, be): 0.0 for al in alphas for be in betas}
     p_rows = []
     for gid in sorted(games):
         L = analyse(load_game(gid, args.team)["tx"])
         rec = ours.get(gid, {})
-        est = (rec.get("est") or {}).get("deep") or (rec.get("est") or {}).get("fast") or {}
+        E = rec.get("est") or {}
+        est = (E.get("deep") or E.get("fast") or {}) if args.tier == "auto" else (E.get(args.tier) or {})
         print(f"\n== game {gid}: {len(L)} lines")
         for line, d in sorted(L.items()):
             lo, hi = d["t"]
@@ -172,12 +191,22 @@ def main():
                     p_rows.append((e["p"], lo > 0))
                 if lo > 0 and math.isfinite(hi):
                     ratios.append(math.log(math.sqrt(lo * hi) / m))
+                own = ((rec.get("tiers") or {}).get(rec.get("winner")) or {}).get(str(line))
+                top = hi
+                if own and own[0] > 0 and d["fair"].get(args.team) is False:   # our own claim was unfair
+                    top = min(top, own[0])
+                if lo > 0:                                                    # surely covered
+                    cens.append((math.log(lo / m), math.log(top / m) if math.isfinite(top) else math.inf))
                 for k in bt:
                     bt[k] += backtest(d, args.team, m, e["p"], *k)
+    if cens:
+        mu, sd, lo_sd, hi_sd = censored_fit(cens)
+        print(f"\nt/m censored MLE over {len(cens)} covered lines (one-sided bounds included): "
+              f"median {math.exp(mu):.2f}, log-sd {sd:.2f} (2-LL range {lo_sd:.2f}-{hi_sd:.2f})")
     if ratios:
         mu, sd = statistics.median(ratios), statistics.pstdev(ratios) if len(ratios) > 1 else float("nan")
-        print(f"\nt/m over {len(ratios)} bounded lines: median {math.exp(mu):.2f}, log-sd {sd:.2f}"
-              f"  -> SIGMA ~ {sd:.2f}; A_MULT ~ 0.9 x {math.exp(mu):.2f}")
+        print(f"t/m over {len(ratios)} two-sided lines only (BIASED, for reference): median {math.exp(mu):.2f}, "
+              f"log-sd {sd:.2f}")
         print("backtest net (rows A_MULT, cols SIGMA):" + "  ".join(f"{be:>8}" for be in betas))
         for al in alphas:
             print(f"  {al:>4} " + "  ".join(f"{bt[(al, be)]:8.0f}" for be in betas))
