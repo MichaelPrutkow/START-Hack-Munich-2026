@@ -151,6 +151,11 @@ def refresh_once(team, rounds_path, cache_dir, output_path, report_path=None, *,
             C.atomic_json(output_path, json.loads(state_text), deadline=guard)
             status.update(status="updated", games=sorted(new_games),
                           parameter_grid_best=state.get("parameter_grid", {}).get("best"),
+                          m_research={'status': state.get('m_research', {}).get('status'),
+                                      'reused': state.get('m_research', {}).get('reused'),
+                                      'elapsed_seconds': state.get('m_research', {}).get('elapsed_seconds'),
+                                      'best': {k: v for k, v in (state.get('m_research', {}).get('best_retrospective') or {}).items()
+                                               if k != 'games'}},
                           validated_calibrations=sum(c.get("status") == "validated" for c in state["calibrations"]))
     except C.RefreshBusy:
         status.update(status="busy", reason="another process is refreshing learning")
@@ -208,6 +213,13 @@ class LearningService:
         result = refresh_once(*self.args, schedule=self._current_schedule, **self.options)
         with self._lock:
             self.status = result
+        research = result.get('m_research', {})
+        if result.get('status') == 'updated' and research.get('best'):
+            import logging
+            best_m = research['best']
+            logging.getLogger('c2f').info(
+                'm research (evaluation only): %s x %.2f; delta %s..%s; reused=%s',
+                best_m['source'], best_m['m_factor'], best_m['delta_lower'], best_m['delta_upper'], research['reused'])
         best = result.get("parameter_grid_best")
         if result.get("status") == "updated" and best:
             import logging

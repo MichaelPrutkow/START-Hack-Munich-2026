@@ -243,3 +243,38 @@ Prüfergebnis ersetzt nicht die Top-10-Rangliste und ändert keine Live-Paramete
 halten damalige Schätzungen und Gegnerabgaben fest; Promptwechsel und breite Preisintervalle
 begrenzen die Aussagekraft. Prompt-/Konfigurationskennungen ändern sich mit dieser Version,
 sodass frühere Kalibrierungen nicht ungeprüft auf die neue Bewertungslogik übertragen werden.
+
+### Rechenzeit zwischen den Runden: Preis-Schätzervergleich für m
+
+Jeder erfolgreiche Lern-Neuaufbau untersucht zusätzlich unter `m_research` acht Verfahren:
+die tatsächlich gewählte Schätzung, Fast, Deep, Focus, Max, Median und geometrisches Mittel
+verfügbarer Modellstufen sowie den 50/50-Mittelwert von Fast/Deep. Für jedes Verfahren werden
+m-Faktoren 0,50 bis 1,50 in 0,01-Schritten gerechnet: 808 Kandidaten über die letzten bis zu
+20 vollständigen Cache-Spiele. Focus und Deep zählen im stufenübergreifenden Ensemble nicht
+doppelt, identische bekannte Modellnamen werden dort ebenfalls nur einmal verwendet.
+
+Die Berechnung verwendet originale gespeicherte Schätzungen. Deckungswahrscheinlichkeit,
+A_MULT, SIGMA, Bias und damaliger Recall bleiben für einen gepaarten Vergleich gleich.
+Alternative Schätzungen werden nur bei ähnlicher Deckungswahrscheinlichkeit (Differenz
+höchstens 0,10) und identischen Zeilenlimits verglichen. Dokumentbeträge und gemeinsame
+Limit-Allokationen werden nicht verändert. Fehlende/unpassende Stufen lassen die betreffende
+Position unverändert; die unterschiedliche Datenabdeckung steht im Bericht. Das ist ein
+Vergleich der bedingten Preise, nicht einer kompletten alternativen Modellstrategie.
+
+Der automatische Lernbericht und `uv run learn.py --status` zeigen Top 10, Gewinnspannen,
+Veränderung gegenüber tatsächlichen Zahlungen und Ergebnis ohne die stärkste Runde.
+`m_research.walk_forward` wählt nach mindestens fünf früheren auswertbaren Spielen den
+Kandidaten und prüft ihn erst im nächsten Spiel. Ein Schätzer benötigt dafür Daten aus
+mindestens drei früheren Spielen. Die separat gespeicherten `fixed_candidate_test_scores`
+sind beschreibende Vergleiche auf denselben späteren Spielen; ihre nachträglich beste Zeile
+ist kein unabhängig validierter Gewinner.
+
+Der Runner startet diese Forschung automatisch über den bestehenden Lernservice. Kein
+zusätzlicher dauerhaft laufender Prozess, keine zusätzlichen Modellanfragen, keine Abgaben
+und keine automatische Übernahme dieser Forschungskandidaten. Eine frühere erfolgreiche
+Auswertung wird bei identischem Fingerabdruck von Daten und Rechenlogik wiederverwendet.
+Deadline-Prüfungen halten Spielfenster und Refresh-Budget ein; bei Abbruch bleibt das letzte
+vollständige Lernartefakt erhalten. Mehr Rechenzeit beseitigt weder fehlende Daten noch
+Ungewissheit über versteckte faire Preise. Neue Prompts/Modelle können die Übertragbarkeit
+historischer Resultate einschränken. Zusätzliche API-Neubewertungen alter Fälle bleiben ein
+separates, ausdrücklich gestartetes Experiment (`eval_cases.py`).

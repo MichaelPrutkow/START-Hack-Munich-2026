@@ -520,7 +520,10 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
     grid = evaluate(prepared_grid, window, team, checkpoint)
     from .decision_review import group_diagnostics
     grouped = group_diagnostics(reports)
-    return {"group_price_diagnostics": grouped, "parameter_grid": grid, "schema_version": SCHEMA_VERSION, "algorithm": ALGORITHM,
+    from .m_research import run as research_m
+    research = research_m(prepared_grid, window, team, checkpoint=checkpoint,
+                          previous=(previous_state or {}).get('m_research'))
+    return {"m_research": research, "group_price_diagnostics": grouped, "parameter_grid": grid, "schema_version": SCHEMA_VERSION, "algorithm": ALGORITHM,
             "controls": {**CONTROLS, "a_mult_grid": list(A_MULT_GRID)},
             "campaign": CAMPAIGN, "team": team,
             "created_at": created.isoformat(), "max_game": max((g["game"] for g in reports), default=0),
@@ -953,6 +956,8 @@ def render_report(state):
         lines.append(f"- Excluded {excluded.get('game', 'record ' + str(excluded.get('record')))}: {excluded['reason']}")
     from .parameter_grid import report
     lines += report(state.get("parameter_grid"))
+    from .m_research import report as research_report
+    lines += research_report(state.get("m_research"))
     lines += ['', 'Price estimates by category (descriptive, confirmed-covered uncapped lines only; no automatic correction):']
     for category, stats in state.get('group_price_diagnostics', {}).items():
         lines.append(f"- {category}: {stats['lines']} lines, games {stats['games']}; median fair/estimate "

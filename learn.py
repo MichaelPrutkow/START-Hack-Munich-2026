@@ -43,6 +43,8 @@ def show_state(state):
         return
     from claim_to_fame.parameter_grid import report
     print("\n".join(report(state.get("parameter_grid"))))
+    from claim_to_fame.m_research import report as research_report
+    print("\n".join(research_report(state.get("m_research"))))
     validated = sum(c["status"] == "validated" for c in state["calibrations"])
     print(f"Learning: {len(state['games'])} reconciled games, {state['summary']['lines']} lines, "
           f"{len(state['excluded'])} excluded; {validated} validated calibrations.")
