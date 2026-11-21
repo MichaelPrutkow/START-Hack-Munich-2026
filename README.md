@@ -72,6 +72,22 @@ uv run learn.py --team chineseModels
 
 Calibration stays in shadow until there are at least six games, sixteen confirmed-covered training lines and eight later validation lines. Validation includes all otherwise eligible high-coverage predictions, including coverage mistakes. A frozen candidate must improve the held-out conservative net lower bound by at least 5% over actual baseline net. Only matching model/prompt/configuration cohorts qualify. Stale, malformed, future-game or unreconciled data are ignored. Already-calibrated and optional uncertainty-adjusted observations are excluded from the baseline fit.
 
+### Tuning A_MULT and SIGMA against the field (`tune.py`)
+
+The same watcher run (`--learn`) also replays our pricing rule on every logged line with other
+`A_MULT`/`SIGMA` values against the other teams' real charges and limits from the public
+transactions (`claim_to_fame/tuning.py`) and writes the chosen pair to `out/params.json`. The
+runner re-reads `.env` and `out/params.json` before **every** game, so neither a manual `.env`
+change nor a tuning step needs a restart. Guardrails: at least 8 lines; weighted gain at least
+1,000 EUR (recent games weigh more, half-life 10 games); not worse in 2 of 3 chronological
+periods; at most 0.05 `A_MULT` and 0.30 `SIGMA` per update; bounds 0.70–1.00 and 0.30–1.40.
+The first `params.json` is written only on a real change, so until then `.env` stays in charge.
+`AUTO_TUNE=0` in `.env` pins the `.env` values. A validated `feedback.py` calibration still
+overrides `SIGMA` on its eligible lines. Report without writing: `uv run tune.py`; on a machine
+without runner logs: `uv run tune.py --from-leaderboard 0.85`. History: `out/tune.jsonl`.
+Why: notes/TRANSAKTIONEN_G1-9.md (games 7–9 lost mainly on the reviewer side; SIGMA 0.35 far
+too narrow).
+
 Recall supplies whole-line fair-price **ranges** only for similar descriptions with the same policy, quantity and unit. It is not a market unit-rate lookup and never copies old coverage into a new case. No August records are used. Legacy logs without `final_ab` and `line_sources` are excluded rather than guessing a merged submission.
 
 New raw votes, actual submitted prices, per-line sources and model/prompt/configuration/learning provenance remain in ignored `out/`. Implementation tests do not establish a live profit improvement. Current shared-cap schema identifies groups by amount; distinct clauses with equal numeric limits remain a known limitation.
@@ -94,6 +110,7 @@ The one-page submission text and three-minute pitch with Q&A are in [`writeup/ON
 | `watch.py` | Read-only per-game reports and missing-submission alarms. |
 | `eval_cases.py` | Historical/current LLM comparison on finished cases. |
 | `claim_to_fame/feedback.py`, `learn.py` | Settlement reconciliation, loss bounds, calibration, contextual recall and private artifacts. |
+| `claim_to_fame/tuning.py`, `tune.py` | A_MULT/SIGMA replay against the field's real a and b, guarded update of `out/params.json`. |
 | `tests/` | Offline domain, round orchestration and historical-import regression tests. |
 | `test_runner.py` | Runs the entire offline suite using Python's standard-library `unittest`. |
 

@@ -394,13 +394,63 @@ def configure_pricing():
     A_MULT, SIGMA, DISAGREE = values
 
 
+ENV_PATH = ROOT / ".env"
+SETTINGS_SOURCE = "env"
+AUTO_TUNE = True
+TUNABLE = ("A_MULT", "SIGMA", "DISAGREE", "AUTO_TUNE")
+
+
+def read_env(path):
+    """{key: value} of a .env file (empty values skipped); unlike load_env, no side effects."""
+    out = {}
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip().removeprefix("export ").strip(), v.strip().strip('"').strip("'")
+        if v:
+            out[k] = v
+    return out
+
+
+def refresh_settings():
+    """Before every game: re-read A_MULT/SIGMA/DISAGREE from .env (no restart needed) and, with
+    AUTO_TUNE=1 (default), apply out/params.json that tune.py writes after each completed game
+    (watch.py --learn). AUTO_TUNE=0 in .env pins the .env values. Validated feedback.py calibrations
+    still override SIGMA per line. Never raises: on any error the previous values stay."""
+    global A_MULT, SIGMA, DISAGREE, SETTINGS_SOURCE, AUTO_TUNE
+    try:
+        env = {**{k: os.environ[k] for k in TUNABLE if k in os.environ}, **read_env(ENV_PATH)}
+        a, s = float(env.get("A_MULT", A_MULT)), float(env.get("SIGMA", SIGMA))
+        dis, src = float(env.get("DISAGREE", DISAGREE)), "env"
+        auto = env.get("AUTO_TUNE", "1") != "0"
+        if auto:
+            import tune
+            p = tune.load_params()
+            if p:
+                a, s, src = p["a_mult"], p["sigma"], f"tune {p.get('updated', '?')}"
+        if not all(math.isfinite(x) and x > 0 for x in (a, s, dis)) or dis < 1:
+            raise ValueError(f"bad settings A_MULT {a} SIGMA {s} DISAGREE {dis}")
+        if (a, s, dis) != (A_MULT, SIGMA, DISAGREE):
+            log.info("settings: A_MULT %.3f -> %.3f, SIGMA %.3f -> %.3f, DISAGREE %.2f -> %.2f (%s)",
+                     A_MULT, a, SIGMA, s, DISAGREE, dis, src)
+        A_MULT, SIGMA, DISAGREE, SETTINGS_SOURCE, AUTO_TUNE = a, s, dis, src, auto
+    except Exception as e:
+        log.warning("settings refresh failed, keeping A_MULT %.3f SIGMA %.3f: %s", A_MULT, SIGMA, e)
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def strategy_identity():
     """Identify the estimator/configuration that produced training observations."""
-    config = {"a_mult": A_MULT, "sigma": SIGMA, "disagree": DISAGREE,
+    # A_MULT/SIGMA are pricing multipliers, not part of the estimator: tune.py may change them
+    # between games, and each record keeps its own a_mult/sigma for the holdout check.
+    config = {"disagree": DISAGREE,
               "aggregation": "median-spread-v1", "selection": "evidence-v1",
               "uncertainty_pricing": os.environ.get("PRICING_UNCERTAINTY", "0"),
               "source": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
@@ -591,7 +641,7 @@ def play_game(gid, start, dry=False, use_llm=True):
                "usage": dict(usage), "models": {t.name: t.model for t in TIERS},
                "items": items, "tiers": dict(out), "est": dict(est), "votes": dict(vote_log),
                "final_ab": final, "line_sources": best["sources"].copy(),
-               "a_mult": A_MULT, "sigma": SIGMA, **identity,
+               "a_mult": A_MULT, "sigma": SIGMA, "settings": SETTINGS_SOURCE, **identity,
                "policy_hash": hashlib.sha256(policy.encode()).hexdigest(),
                "learning_version": state.get("schema_version") if state else None,
                "learning_max_game": state.get("max_game") if state else None,
@@ -658,6 +708,7 @@ def run_forever(dry, use_llm):
             find_zip(gid)
         except FileNotFoundError:
             log.critical("[%s] ZIP MISSING in cases/ - download it now!", gid)
+        refresh_settings()
         time.sleep(max(0.0, start - time.time() - 0.2))
         try:
             play_game(gid, start, dry, use_llm)

@@ -192,3 +192,11 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - `README.md`, `.env.example`, `writeup/ONE_PAGE.md`, `writeup/PITCH.md` fertig; Spiel-8-Zahlen explizit Zwischenstand. Kein behaupteter Produktions-Gewinn. Getrennte gleich hohe Shared Caps sind im bisherigen Schema weiterhin nicht eindeutig unterscheidbar.
 - Verifikation: 73 Offline-Tests, davon 72 bestanden und 1 mangels Case-0-PDF übersprungen; synthetische Frist-/Fokus-/Mischabgabe-/Caps-/Kalibrierungsfälle, 400 synthetische Auszahlungsfälle zur Einschließung der verborgenen wahren Werte, keine Live-Abgaben oder Strategie-LLM-Aufrufe. Echter Case-0-PDF-Test mangels entschlüsselter Datei übersprungen.
 - Integration lokal auf `codex/round-feedback`; nicht pushen. Nächster Team-Schritt: mit Michaels Key-Änderungen integrieren, nur auf Philips Mac zwischen Spielfenstern neu starten und dort Watcher mit `--learn` aktivieren.
+
+### 21.11.2026 16:45 · Claude · Transaktionsanalyse G1–9 und automatisches Tuning (Branch `auto-tune`, nicht gepusht)
+
+- Analyse aller Transaktionen G1–9 (Cache, keine neue Anfrage): `notes/TRANSAKTIONEN_G1-9.md`. Ab G7 verlieren wir vor allem als Reviewer (b ≈ a nimmt die überhöhten Forderungen des Feldes an; 404 lehnt 96 % ab). Empfehlung SIGMA 0,35 → 1,0, Backtest +5.475 über G1–9.
+- Auf Kaans `codex/round-feedback` aufgesetzt (nicht parallel): neu `claim_to_fame/tuning.py` + `tune.py` (Replay A_MULT/SIGMA gegen das Feld, Leitplanken, `out/params.json`, Verlauf `out/tune.jsonl`); `watch.py --learn` ruft es nach `feedback.build_state` auf (nur Cache, keine API). `runner.py`: `refresh_settings()` vor jedem Spiel (`.env` neu lesen, `params.json` bei `AUTO_TUNE=1`), `settings` im Rundenrecord. `strategy_identity` ohne `a_mult`/`sigma`: das sind Preismultiplikatoren, keine Schätzer-Eigenschaft; sonst würde jeder Tuning-Schritt Kaans Kalibrier-Kohorte zurücksetzen. **Bitte Kaan gegenlesen.**
+- Verifikation: `test_runner.py` 84 Tests, 83 ok, 1 übersprungen (Case-0-PDF); neu `tests/test_tuning.py` (11). Probelauf `tune.py --from-leaderboard 0.85` auf G1–9.
+- Nächster Schritt: Michaels OK zum Push; mit `origin/main` (18e51e3, max-Tier) und Michaels lokalem `escalation` zusammenführen; Philip `git pull`, Runner zwischen zwei Spielen neu starten, Watcher mit `--learn` starten.
+

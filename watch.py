@@ -33,6 +33,13 @@ def update_learning(team, rounds, learning_file):
     write_state(state, learning_file, report_path=learning_file.with_name("learning-report.md"))
     ready = sum(c["status"] == "validated" for c in state["calibrations"])
     print(f"Learning updated: {len(state['games'])} reconciled games; {ready} validated calibrations.", flush=True)
+    try:                                     # A_MULT/SIGMA against the field -> out/params.json
+        import tune
+        _, rep = tune.update(team, fetch=False, write=True, rounds_path=rounds,
+                             params_path=learning_file.with_name("params.json"))
+        print(f"Tuning: {rep['lines']} lines, {rep['decision']}", flush=True)
+    except Exception as e:
+        print(f"Tuning failed: {type(e).__name__}; previous params.json retained.", flush=True)
 
 
 def alarm(title, text, loud):
