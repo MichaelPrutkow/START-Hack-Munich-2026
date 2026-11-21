@@ -269,6 +269,11 @@ def build_tiers():
     if env("DEEP_MODEL", "gpt-6.2-astra").lower() != "off":
         tiers.append(Tier("deep", 2, env("DEEP_MODEL", "gpt-6.2-astra"), env("DEEP_REASONING", "high"),
                           int(env("DEEP_VOTES", "3")), float(env("DEEP_BUDGET", "50"))))
+    # Optional slowest tier: runs in parallel, overwrites deep only if it finishes before the
+    # deadline, otherwise deep's answer stands. Uses the time deep leaves unused (~11-25 s).
+    if env("MAX_MODEL", "off").lower() != "off":
+        tiers.append(Tier("max", 3, env("MAX_MODEL"), env("MAX_REASONING", "xhigh"),
+                          int(env("MAX_VOTES", "3")), float(env("MAX_BUDGET", "52"))))
     return tiers
 
 
@@ -375,6 +380,23 @@ def price(p, m, stated, cap, fallback):
 
 
 # ---------------------------------------------------------------- one round
+def log_prices(gid, name, items, part, est=None):
+    """Logging only: one row per line with a/b (and p, m) of one stage. Never raises."""
+    try:
+        est = est or {}
+        rows = [f"[{gid}] {name:<5} pos  description                     p      m          a          b"]
+        for i in sorted(part):
+            a, b = part[i]
+            e = est.get(i, {})
+            desc = str(items.get(i, {}).get("description", ""))[:30]
+            pp = f"{e['p']:.2f}" if "p" in e else "   -"
+            mm = f"{e['m']:9.2f}" if "m" in e else "        -"
+            rows.append(f"[{gid}] {name:<5} {i:>3}  {desc:<30} {pp} {mm} {a:10.2f} {b:10.2f}")
+        log.info("\n".join(rows))
+    except Exception as ex:                          # pragma: no cover
+        log.warning("[%s] price table %s failed: %s", gid, name, type(ex).__name__)
+
+
 def play_game(gid, start, dry=False, use_llm=True):
     POOL.new_round()
     deadline = start + ROUND_SECONDS - SAFETY if gid != 0 else time.time() + ROUND_SECONDS
@@ -390,6 +412,7 @@ def play_game(gid, start, dry=False, use_llm=True):
     rules = {i: (floor_c(v), ceil_c(v)) for i, v in fb.items()}
     best = {"level": 0, "ab": rules, "tier": "rules"}
     out, usage, slock, est = {"rules": rules}, {}, threading.Lock(), {}
+    log_prices(gid, "rules", items, rules)
 
     def run_tier(tier, msgs):
         try:
@@ -415,6 +438,7 @@ def play_game(gid, start, dry=False, use_llm=True):
                     best.update(level=tier.level, ab=merged, tier=tier.name)
             log.info("[%s] %s (%s): %d/%d lines, %.1fs after key, tokens %s", gid, tier.name, tier.model,
                      len(part), len(items), time.time() - t_key, usage[tier.name])
+            log_prices(gid, tier.name, items, part, est.get(tier.name))
         except NoKeys:
             log.error("[%s] %s: all OpenAI keys exhausted", gid, tier.name)
         except Exception as e:
