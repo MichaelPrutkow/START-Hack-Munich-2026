@@ -280,11 +280,15 @@ def build_tiers():
     if env("DEEP_MODEL", "gpt-6.2-astra").lower() != "off":
         tiers.append(Tier("deep", 2, env("DEEP_MODEL", "gpt-6.2-astra"), env("DEEP_REASONING", "high"),
                           int(env("DEEP_VOTES", "3")), float(env("DEEP_BUDGET", "50"))))
+        # gpt-6.2-astra answers n>1 with HTTP 400; probing it after every restart cost deep in G21
+        # and the focus pass in G23/G24. Parallel single calls from the start (DEEP_BUNDLE=1 to probe).
+        tiers[-1].n_ok = env("DEEP_BUNDLE", "0") == "1"
     # Optional slowest tier: runs in parallel, overwrites deep only if it finishes before the
     # deadline, otherwise deep's answer stands. Uses the time deep leaves unused (~11-25 s).
     if env("MAX_MODEL", "off").lower() != "off":
         tiers.append(Tier("max", 3, env("MAX_MODEL"), env("MAX_REASONING", "xhigh"),
                           int(env("MAX_VOTES", "3")), float(env("MAX_BUDGET", "52"))))
+        tiers[-1].n_ok = env("MAX_BUNDLE", "0") == "1"
     return tiers
 
 
@@ -775,6 +779,7 @@ def play_game(gid, start, dry=False, use_llm=True):
             if not focused_items:
                 return
             focused = Tier("focus", tier.level + 0.5, tier.model, tier.extra.get("reasoning_effort"), 2, budget)
+            focused.n_ok = tier.n_ok                    # same model: never re-probe a refused n>1
             stage = focused.name
             fm = build_focus_prompt(policy, desc, focused_items, details, historical_context=history)
             fv, fu = assess(fm, budget, focused)

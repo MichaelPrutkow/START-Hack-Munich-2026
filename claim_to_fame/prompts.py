@@ -49,6 +49,9 @@ device or duty was missing, as established by the description), no betterment, u
 - A ceiling stated for a whole class "in the aggregate", "per insured event across all items,
   trades and invoices" or "covering value, repair and recovery together" is a shared_cap on every
   line of that class.
+- Overvoltage/surge damage without a surge-protection device: settled claims in this tournament
+  are NOT halved for the missing device. Price each damaged appliance at its full standard-grade
+  value (for an upgraded replacement: the equivalent of the appliance that failed).
 Price level:
 - Replacement electronics and appliances: an equivalent standard-grade device at a typical German
   street price, not a premium model or list price.
