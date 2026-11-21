@@ -59,6 +59,7 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 9 | Write-up (1 Seite) und Pitch | – | offen | `writeup/` |
 | 10 | Runner modularisieren, Einstiegspunkte erhalten, offline verifizieren | [X] | fertig | `runner.py`, `claim_to_fame/`, `eval_cases.py`, `test_runner.py`, `tests/`, `README.md`, `.env.example` |
 | 11 | Michaels neue Commits mit lokalem Refactor zusammenführen, offline prüfen, nicht pushen | [X] | fertig | `AGENTS.md`, `README.md`, Merge von `origin/main` |
+| 12 | Review von Kaans Refactor (`94a449c`, Merge `10ad63b`) | [C] | fertig | nur gelesen, Tests in Kopie |
 
 ## Offene Fragen
 
@@ -169,3 +170,9 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Nur Dokumentationskonflikte in `README.md` und `AGENTS.md`: Watcher-Erklärung, Modulübersicht und beide Übergaben erhalten. `watch.py` und `notes/DECISIONS.md` unverändert vom Remote übernommen. README ergänzt den expliziten Pull-Befehl `git pull --no-rebase`; keine globale Git-Konfiguration geändert.
 - Verifikation: `.venv/bin/python -B test_runner.py` — 12 bestanden, 1 mangels Case-0-PDF übersprungen; zusätzlicher Offline-Smoke-Test von `watch.report` mit synthetischen Transaktionen bestanden. Keine API-/LLM-Aufrufe, kein Runner oder Watcher gestartet.
 - Status: lokal integriert und getestet. Nächster Schritt: User prüft den Merge; Push bleibt ausdrücklich ausgesetzt.
+
+### 21.11.2026 15:45 · Claude · Review Kaans Refactor, übernommen
+
+- Kaans Refactor ist reine Umstrukturierung: Die 22 verschobenen Definitionen sind per Syntaxbaum identisch mit `7221b47`, `price`/`b_mult`/`aggregate` nehmen A_MULT/SIGMA/DISAGREE jetzt als Parameter, der übrige `runner.py` ist unverändert. Preisregel steht jetzt in `claim_to_fame/pricing.py` (Abschnitt Live-Betrieb nennt noch `runner.py: price`, dort nur ein Wrapper).
+- Verifikation: Alt und neu liefern auf den Fällen 0–5 und 7 dieselben Positionen und denselben Prompt (7/7); 60.000 zufällige Preis-, Aggregations- und Shared-Cap-Eingaben ohne Abweichung; `test_runner.py` 13/13 inkl. echtem Case-0-PDF; `runner.py --check` ok. Kein LLM-Backtest (gleicher Code, nur Token).
+- Michaels `main` per `git pull --ff-only` auf `10ad63b`. Philip: `git pull --ff-only` jederzeit, Neustart nicht nötig. Nebenbefund: `--check` auf Michaels Mac zeigte Timeout bei OPENAI_KEY_1/_2, Key 3 ok; Ursache unklar, auf Philips Mac prüfen.
