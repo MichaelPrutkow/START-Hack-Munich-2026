@@ -78,7 +78,7 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 21 | Recall-Deckel für a aus eigenen abgerechneten Spielen (Schatten/live per `.env`) | [C] | review | `claim_to_fame/recall.py`, `runner.py`, `tests/test_recall.py`, `.env.example`, `README.md`, `notes/DECISIONS.md` |
 | 22 | Spiel 19: Deep-Ausfall und Nettobilanz nachvollziehen | [X] | fertig | `AGENTS.md` |
 | 23 | Deep-Zeitbudget, Fehlerdiagnose und lokales Latenzprofil | [X] | fertig | `runner.py`, `tests/test_runtime.py`, `.env`, `.env.example`, `README.md`, `AGENTS.md` |
-| 24 | Handanalyse G1–18, Recall-Modus 2 (a und b), Prompt-Hinweise | [C] | in Arbeit | `claim_to_fame/recall.py`, `runner.py`, `tests/test_recall.py`, `claim_to_fame/prompts.py`, `.env.example`, `README.md`, `notes/DECISIONS.md` |
+| 24 | Handanalyse G1–18, Recall-Modus 2 (a und b), Prompt-Hinweise | [C] | review | `claim_to_fame/recall.py`, `runner.py`, `tests/test_recall.py`, `claim_to_fame/prompts.py`, `.env.example`, `README.md`, `notes/DECISIONS.md` |
 
 ## Offene Fragen
 
@@ -311,3 +311,10 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - `RECALL_CAP=2` (neuer Default): `a` **und** `b` höchstens 0,95 × niedrigste zurückgerufene unfaire Forderung (`cap_hi`), ein- oder zweiseitig, nie anheben, Zeilen mit Dokumentbetrag ausgenommen. Nachrechnung G1–18 mit echtem `recall.py`-Matching, A_MULT 0,68, `score_submission`: ohne Recall Mitte 26,3k, alter Modus 1 26,6k, Modus 2 31,2k [21,2k; 41,2k]; G1–10 und G11–18 beide besser. Erfasst u. a. G10-Sammelzeile aus G8, G17-Diagnose/Anfahrt aus G1/G15 (t≈0).
 - `SIGMA` bewusst nicht geändert: b = 0,6 m war in G3–10 besser, in G11–18 schlechter (instabil).
 - Tests: 185 offline ok. **Philip: Runner stoppen, erst dann `git pull --ff-only`, neu starten (Code-Änderung im laufenden Prozess hat G20 gebrochen). In `.env` `RECALL_CAP=2` setzen oder die Zeile löschen.**
+
+### 21.11.2026 19:00 · Claude · Recall abgesichert, Prompt-Hinweise v3, A_MULT 0,75
+
+- Recall-Modus 2 nach Kaans Review abgesichert (`81f9cf6`): nur gleiche Einheit oder je eine einzelne Pauschale, nie unter belegter fairer Untergrenze, kein Deckel bei widersprüchlichen Vorgängern. Nachrechnung G1–18 unverändert (31,1k Mitte).
+- Prompt-Hinweise v3 (Deckung + Preisniveau) mit LLM-Backtest belegt, Zahlen in `notes/DECISIONS.md` 19:00. Neuer Prompt gehört zu **A_MULT 0,75** (zusammen bewertet). `.env.example` zeigt jetzt die Live-Werte (`A_MULT=0.75`, `AUTO_TUNE=0`, `RECALL_CAP=2`).
+- Spiel 21 erklärt: Verluste aus angenommenen überhöhten Forderungen bei Handwerksleistungen (Leckreparatur, Trocknung, Rohr freilegen, Trockner); Deckung richtig. Fälle 19–21 lesend nach `out/cases/` entschlüsselt (außerhalb der Spielfenster).
+- 189 Tests ok. **Philip: Runner stoppen, `git pull --ff-only`, in `.env` `A_MULT=0.75` setzen, neu starten.** Offen: unabhängige Kontrollschätzung nur protokollieren (Kaans Punkt 3).

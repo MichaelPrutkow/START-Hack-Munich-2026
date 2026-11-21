@@ -40,6 +40,26 @@ device or duty was missing, as established by the description), no betterment, u
 - No new-for-old deduction unless the policy pays current or market value.
 - Betterment or upgrade: the original pre-loss standard is owed, a positive amount, not 0.
 - Preventive work or maintenance without confirmed damage is not owed.
+- If the policy says its list of insured cost heads is exhaustive, a charge that is neither on
+  that list nor a repair cost of a damaged item is not covered: assessment, diagnostic or failure
+  reports, safety or wiring checks, admin or processing fees and return visits are 0 unless the
+  policy itself names them as covered.
+- A vehicle, call-out or travel charge follows the work on its invoice: covered (once per
+  undertaking) only when covered work was done at that visit; 0 on an invoice whose work is not covered.
+- A ceiling stated for a whole class "in the aggregate", "per insured event across all items,
+  trades and invoices" or "covering value, repair and recovery together" is a shared_cap on every
+  line of that class.
+Price level:
+- Replacement electronics and appliances: an equivalent standard-grade device at a typical German
+  street price, not a premium model or list price.
+- Small ancillary lines on a craftsman invoice (fitting a small pane, disposing of one material
+  category within a shared load, auxiliary or cleaning material, a measuring-device flat rate)
+  are minor amounts, not priced like a separate job.
+- Price materials (fittings, pipe sections, insulation pieces) per piece at installer prices and
+  keep labour to the stated time on site; do not move material value into the labour line.
+- Amounts in the description are level anchors even when they are not exact line amounts: if
+  repairs "came to nearly" a stated purchase price, the repair lines together sit slightly below
+  it, split as described; a nearly new device with a stated price is worth about that price.
 - Values in square brackets such as [amount] or [percentage] are unknown schedule values:
   never invent a number for them (no guessed deductible).
 - Check amounts in the damage description (purchase price, repair totals, "most of it for
