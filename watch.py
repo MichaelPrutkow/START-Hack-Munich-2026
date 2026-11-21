@@ -123,9 +123,11 @@ def main():
             elif now - start > LATE and gid not in alarmed:
                 alarm(f"Spiel {gid} nicht abgeschlossen", "Leaderboard zeigt das Spiel 15 min nach Start nicht als fertig.", True)
                 alarmed.add(gid)
+        pending = [g for g, (s, _) in G.items() if g not in done and s <= now]
         upcoming = [s for s, _ in G.values() if s > now]
         nxt = min(upcoming) if upcoming else now + 600
-        time.sleep(max(30.0, min(nxt + 90 - time.time(), 600)))
+        wake = 45.0 if pending else nxt + 90 - time.time()     # started but not reported: poll
+        time.sleep(max(30.0, min(wake, 600)))
 
 
 if __name__ == "__main__":
