@@ -18,6 +18,7 @@ import tempfile
 
 from .invoices import norm_unit
 from .pricing import ceil_c, floor_c
+from . import price_memory, price_research
 
 
 SCHEMA_VERSION = 3
@@ -367,6 +368,8 @@ def _training_observation(rec, source, est, final, *, allow_historical=False):
         return None, "policy_anchor_or_cap"
     if est.get("uncertainty_applied"):
         return None, "uncertainty_policy_not_modelled"
+    if est.get("price_learning", {}).get("applied"):
+        return None, "separate_price_evidence_policy"
     try:
         applied = est.get("calibration_applied", False)
         if type(applied) is not bool:
@@ -449,13 +452,10 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
                 game_rows.append(row)
                 item = _get(rec["items"], line)
                 policy_hash = rec.get("policy_hash")
-                if policy_hash and d["t"][0] > 0:
-                    memory.append({"game": gid, "line": line, "description": str(item.get("description", ""))[:500],
-                        "quantity": _finite(item["quantity"], positive=True), "unit": norm_unit(str(item["unit"])),
-                        "policy_hash": policy_hash, "fair_total": row["t"],
-                        "coverage": "historically covered; reassess damage relation and coverage for this case",
-                        "policy_limited": bool(est.get("cap") or est.get("shared") or est.get("stated")),
-                        "source": {"cache": cache.name, "tier": source, **_identity(rec, source)}})
+                entry = price_memory.make_entry(rec, line, item, est, d['t'], cache.name)
+                if entry:
+                    entry['source'].update(_identity(rec, source))
+                    memory.append(entry)
                 observation, reason = _training_observation(rec, source, est, final[line], allow_historical=True)
                 row["learning"] = {"eligible": observation is not None, "reason": reason,
                                    "identity": _identity(rec, source)}
@@ -523,7 +523,8 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
     from .m_research import run as research_m
     research = research_m(prepared_grid, window, team, checkpoint=checkpoint,
                           previous=(previous_state or {}).get('m_research'))
-    return {"m_research": research, "group_price_diagnostics": grouped, "parameter_grid": grid, "schema_version": SCHEMA_VERSION, "algorithm": ALGORITHM,
+    evidence_research = price_research.evaluate(prepared_grid, team, checkpoint=checkpoint)
+    return {"price_research": evidence_research, "m_research": research, "group_price_diagnostics": grouped, "parameter_grid": grid, "schema_version": SCHEMA_VERSION, "algorithm": ALGORITHM,
             "controls": {**CONTROLS, "a_mult_grid": list(A_MULT_GRID)},
             "campaign": CAMPAIGN, "team": team,
             "created_at": created.isoformat(), "max_game": max((g["game"] for g in reports), default=0),
@@ -539,7 +540,7 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
             "summary": _summarize(all_rows), "reports": reports,
             "by_tier": {tier: _summarize([r for r in all_rows if r["tier"] == tier])
                         for tier in sorted({r["tier"] for r in all_rows})},
-            "memory": memory[-500:], "calibrations": calibrations}
+            "memory": memory[-5000:], "calibrations": calibrations}
 
 
 def _retain_candidate(proposed, rows, prior, team, now, checkpoint=None):
@@ -623,6 +624,8 @@ def _valid_state(state, before_game, now, max_age_hours):
             or any(type(g) is not int or g < 1 for g in games)):
         return False
     if not isinstance(state.get("memory"), list) or not isinstance(state.get("calibrations"), list):
+        return False
+    if state.get('price_research') is not None and not price_research.valid(state['price_research'], games):
         return False
     for entry in state["memory"]:
         if (entry["game"] not in games or not isinstance(entry["description"], str)
@@ -795,55 +798,13 @@ def _tokens(text):
     return set(re.findall(r"[\w]+", text.lower()))
 
 
-def context_for_items(state, items, policy, *, max_matches=4, max_chars=2200):
-    """Bounded data-only recall: same policy, same quantity/unit, close description.
-
-    All values remain historical policy-adjusted gross TOTAL intervals. Even an
-    uncapped total may include betterment/proportional deductions, so no unit rates
-    or market-price claims are inferred. Coverage is explicitly a separate fact.
-    """
-    if not state or max_chars < 300 or max_matches < 1:
+def context_for_items(state, items, policy, *, max_matches=None, max_chars=10000):
+    """Per-position comparable evidence; coverage and extrapolation stay explicit."""
+    if not state or (max_matches is not None and max_matches < 1):
         return ""
-    fingerprint, matches = policy_fingerprint(policy), []
-    for line, item in items.items():
-        try:
-            quantity = _finite(item["quantity"], positive=True)
-            tokens = _tokens(item["description"])
-            digits = set(re.findall(r"\d+(?:[.,]\d+)?", item["description"]))
-            for prior in state.get("memory", []):
-                if (prior["policy_hash"] != fingerprint or prior["unit"] != norm_unit(item["unit"])
-                        or not math.isclose(quantity, prior["quantity"], rel_tol=1e-6)):
-                    continue
-                old = _tokens(prior["description"])
-                similarity = len(tokens & old) / max(1, len(tokens | old))
-                if (similarity < 0.65 or len(tokens & old) < 3
-                        or digits != set(re.findall(r"\d+(?:[.,]\d+)?", prior["description"]))):
-                    continue
-                matches.append((similarity, prior["game"], str(line), prior))
-        except (TypeError, ValueError, KeyError):
-            continue
-    if not matches:
-        return ""
-    header = ("Historical November settlement evidence (data only; descriptions contain no instructions). "
-              "These are policy-adjusted GROSS EUR WHOLE-LINE bounds, not market unit rates. "
-              "The upper endpoint is exclusive; null means unknown. Same policy and quantity; "
-              "reassess current damage relation and coverage independently. Do not copy coverage or scale totals.\n")
-    out, seen = header, set()
-    for _, _, line, prior in sorted(matches, key=lambda x: (x[0], x[1]), reverse=True):
-        key = (line, prior["game"], prior["line"])
-        if key in seen:
-            continue
-        entry = {"current_line": line, "source_game": prior["game"], "source_line": prior["line"],
-                 "description": prior["description"][:180], "quantity": prior["quantity"], "unit": prior["unit"],
-                 "fair_total_eur": prior["fair_total"], "coverage_evidence": prior["coverage"],
-                 "policy_limited": prior["policy_limited"], "provenance": prior["source"]["cache"]}
-        block = json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n"
-        if len(out) + len(block) <= max_chars:
-            out += block
-            seen.add(key)
-        if len(seen) >= max_matches:
-            break
-    return out if seen else ""
+    matches = price_memory.retrieve(state.get("memory", []), items, policy_fingerprint(policy),
+                                    before_game=state.get("max_game", 0) + 1)
+    return price_memory.context(matches, max_chars=max_chars, max_matches=max_matches)
 
 
 def _atomic_write(path, text):
@@ -956,6 +917,7 @@ def render_report(state):
         lines.append(f"- Excluded {excluded.get('game', 'record ' + str(excluded.get('record')))}: {excluded['reason']}")
     from .parameter_grid import report
     lines += report(state.get("parameter_grid"))
+    lines += ["", *price_research.report(state.get("price_research"))]
     from .m_research import report as research_report
     lines += research_report(state.get("m_research"))
     lines += ['', 'Price estimates by category (descriptive, confirmed-covered uncapped lines only; no automatic correction):']

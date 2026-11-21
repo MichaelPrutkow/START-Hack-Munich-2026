@@ -278,3 +278,68 @@ vollständige Lernartefakt erhalten. Mehr Rechenzeit beseitigt weder fehlende Da
 Ungewissheit über versteckte faire Preise. Neue Prompts/Modelle können die Übertragbarkeit
 historischer Resultate einschränken. Zusätzliche API-Neubewertungen alter Fälle bleiben ein
 separates, ausdrücklich gestartetes Experiment (`eval_cases.py`).
+
+## Gleiche und ähnliche Positionen im Preisgedächtnis
+
+`price_memory.py` sucht in bis zu 5.000 belegten November-Positionen. Vollständige
+Beschreibungen werden normalisiert und über gemeinsame Leistungsbegriffe verglichen;
+ein kleiner expliziter Synonymbestand unterstützt Umformulierungen. Es ist eine lokale
+Textsuche, kein allgemeines semantisches Modell. Andere Zahlen/Maße, widersprüchliche
+Tätigkeiten, Qualität oder Verneinungen werden nicht als gleiche Leistung behandelt.
+Je Position gibt es bis zu drei Beispiele, bevorzugt aus verschiedenen Spielen. Das
+Prompt-Budget von 10.000 Zeichen wird reihum verteilt: erst ein Beispiel je Position,
+dann weitere. Bei sehr langen Rechnungen können trotzdem Beispiele entfallen.
+
+Die Beispiele enthalten Herkunft, Mengen, Einheiten, Policenbezug und Preisintervalle.
+Andere Policen sind nur Vergleichshinweise; bekannte limitierte Positionen werden dabei
+ausgeschlossen. Mengenanpassung ist nur bei linearen Einheiten und einer protokollierten
+vollständigen Erstattung ohne Limits als **Vergleichshypothese** zugelassen. Sie erzeugt
+keine bewiesene aktuelle Preisgrenze und keinen vermeintlichen Marktpreis pro Einheit.
+Deckung und Schadenbezug beurteilt das Modell weiterhin anhand des aktuellen Falls.
+
+`price_research.py` prüft zwei getrennte Korrekturwege automatisch nach abgeschlossenen
+Runden. Die Erinnerung benötigt gleiche Police/Menge, hohe Textähnlichkeit, mindestens
+zwei verschiedene Vorgängerspiele und überlappende, relativ enge zweiseitige Spannen.
+Sie kann zu hohe und zu niedrige Schätzungen korrigieren; keine Intervallmitte wird als
+Wahrheit eingesetzt. Kategorien werden getrennt je Modell/Prompt/Konfiguration aus
+mindestens acht Beobachtungen in drei Spielen angepasst. Der Fit minimiert Fehler zu
+Intervallen und schrumpft kleine Datensätze zum Faktor 1. Beide Wege sind auf Änderungen
+von höchstens 25 % begrenzt und werden nicht miteinander multipliziert.
+
+Jede historische Prüfung nutzt nur frühere Spiele. Freigabe je Modellkennung und
+Korrekturweg (bei Kategorien zusätzlich je Kategorie): mindestens acht geänderte Zeilen
+in drei späteren Spielen, konservativer Vorteil mindestens 5 % des absoluten
+Baseline-Netto-Maßstabs und positiver Vorteil auch ohne die beste Einzelrunde.
+Unbekannte Auszahlungen bleiben Grenzen. Das ist retrospektive Evidenz gegen unveränderte
+Gegner, keine Garantie künftiger Gewinne. Neue Modell-/Promptkennungen brauchen eigene
+Belege. `PRICE_LEARNING=validated` ist der Standard, `shadow` protokolliert Vorschläge,
+`off` deaktiviert die numerische Anwendung. Der Schalter ist unabhängig von `AUTO_TUNE`,
+das weiterhin nur A_MULT/SIGMA/Bias steuert. Bereits kalibrierte Positionen werden nicht
+doppelt korrigiert. Dokumentbeträge, Limits und geteilte Grenzen haben Vorrang. Original-m, korrigiertes m und Belegspiele werden geloggt.
+
+Nach dem üblichen Pull/Neustart auf dem einzigen Runner genügt der automatische Refresh;
+`uv run learn.py --status` zeigt Freigaben und Vergleichsergebnisse. Ein Offline-Neuaufbau
+aus den vorhandenen privaten Logs erfolgt mit `uv run learn.py`. Die Lernbasis besteht ausschließlich aus den eigenen abgeschlossenen Runden.
+
+## Begrenzte Neubewertung abgeschlossener Fälle
+
+`research_prices.py` vergleicht Komponentenprüfung und historische Vergleichsbeispiele
+mit demselben Modell und einer Stimme. Es braucht bereits entschlüsselte lokale Fälle,
+vollständige lokale Abrechnungen und echte Rundenlogs. Keine Schlüsselabfrage, keine
+Abgabe, keine automatische Änderung des Produktionsprompts. Beispiel mit **bereits
+abgeschlossenen** Spielen; die Trennung vor dem Experiment festlegen:
+
+```bash
+uv run research_prices.py --games 30 31 32 33 34 35 --holdout-from 33
+uv run research_prices.py --games 30 31 32 33 34 35 --holdout-from 33 --run
+```
+
+Ohne `--run` wird nur der Plan ausgegeben. Mit `--run` entstehen Modellkosten: maximal
+zwölf Bewertungen und 180 Sekunden insgesamt als Standard; die Aufrufe stoppen vor
+dem nächsten Spielfenster. p, Preisparameter, ursprünglicher Recall und Gegner bleiben
+fest; inkompatible Deckungs-/Limit-Schätzungen verändern die betreffende Zeile nicht.
+Ausfälle und fehlende Antworten bleiben sichtbar. Nur beidseitig erfolgreiche Spiele
+gehen in den gepaarten Vergleich ein, Training und Prüfspiele werden getrennt berichtet.
+Ergebnisse liegen privat in `out/price-experiments.json`. Prüfspiele nicht zur Auswahl
+neuer Promptregeln verwenden. Wiederholte Experimente auf denselben Fällen sind keine
+unabhängige Bestätigung.

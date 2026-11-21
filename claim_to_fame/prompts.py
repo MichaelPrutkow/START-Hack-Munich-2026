@@ -99,6 +99,10 @@ Price level:
   allocation or aggregate total must not become an exact stated_value for a single line.
 - Historical examples are uncertain comparisons, not document facts. Use a range only when
   work, unit, quantity and policy treatment match; explain differences in the clause field.
+- Similar descriptions can hide different work: distinguish repair/replacement/inspection,
+  model or size, material, quality and included services. For each relevant historical example,
+  compare its scope before using the price. A different policy or scaled quantity supplies
+  only a comparison hypothesis, never a proven bound or coverage decision for this case.
 Return one entry for every requested invoice index. In a focused recheck, return only the
 explicitly requested indices; other invoice lines are context for scope and allocation."""
 

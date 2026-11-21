@@ -42,6 +42,8 @@ def show_state(state):
         print("No current usable learning artifact; runner keeps baseline parameters.")
         return
     from claim_to_fame.parameter_grid import report
+    from claim_to_fame.price_research import report as price_report
+    print("\n".join(price_report(state.get("price_research"))))
     print("\n".join(report(state.get("parameter_grid"))))
     from claim_to_fame.m_research import report as research_report
     print("\n".join(research_report(state.get("m_research"))))

@@ -164,6 +164,16 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(set(rec["tiers"]), {"rules", "fast", "deep"})
         self.assertEqual([tag for tag, _ in self.sent], ["provisional", "deep"])
 
+    def test_validated_price_correction_preserves_raw_estimate_and_submission_provenance(self):
+        self.prepare_round([R.Tier("fast", 1, "fake", None, 1, 20)])
+        self.enterContext(patch.object(R, "assess", return_value=([{1: {"covered_prob": 1, "t_if_covered": 100}}], {})))
+        self.enterContext(patch.object(R.price_research, "adjust", return_value=(120, {"applied": True})))
+        rec = R.play_game(1, time.time(), dry=True)
+        self.assertEqual(self.sent[-1][1][1], R.price(1, 120, None, None, 130))
+        detail = rec['est']['fast'][1]
+        self.assertEqual((detail['m_raw'], detail['m_before_price_learning'], detail['m']), (100, 100, 120))
+
+
     def test_failed_llm_keeps_complete_provisional_submission(self):
         self.prepare_round([R.Tier("fast", 1, "fake", None, 1, 20)])
         self.enterContext(patch.object(R, "assess", side_effect=R.NoKeys))

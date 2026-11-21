@@ -36,6 +36,7 @@ import requests
 
 from claim_to_fame import pricing, prompts
 from claim_to_fame import feedback
+from claim_to_fame import price_memory, price_research
 from claim_to_fame.control import assess_control
 from claim_to_fame import recall as recall_mod
 from claim_to_fame.invoices import (
@@ -558,7 +559,7 @@ def strategy_identity():
     def code(fn):
         return digest(ast.dump(ast.parse(inspect.getsource(fn)), include_attributes=False))
     from claim_to_fame import assessment
-    common = {"assessment_audit": code(assessment.audit), "assessment_number": code(assessment.number),
+    common = {"price_learning": price_research.signature(), "assessment_audit": code(assessment.audit), "assessment_number": code(assessment.number),
               "selection_policy": code(assessment.selection), "selection_wrapper": code(selection_decision),
               "disagreement": code(assessment.disagreement), "valuation_categories": assessment.CATEGORIES,
               "max_unreviewed_ratio": assessment.MAX_UNREVIEWED_RATIO,
@@ -570,7 +571,7 @@ def strategy_identity():
               "policy_amounts": code(policy_amounts), "context": code(prompts._context_text),
               "amount_pattern": AMOUNT_RE.pattern,
               "recall": code(feedback.context_for_items), "recall_tokens": code(feedback._tokens),
-              "units": code(norm_unit)}
+              "comparable_memory": price_memory.identity(), "units": code(norm_unit)}
     configs, prompt_hashes = {}, {}
     tiers = list(TIERS)
     deep = next((t for t in tiers if t.name == "deep"), None)
@@ -709,7 +710,7 @@ def play_game(gid, start, dry=False, use_llm=True):
         elif os.environ.get("PRICING_UNCERTAINTY", "0") == "1":
             diagnostic = {"status": "disabled", "reason": "experimental uncertainty policy has no matching validation"}
         log.info("[%s] %s learning: %s", gid, tier.name, diagnostic)
-        part, details = {}, {}
+        part, details, category_models = {}, {}, {}
         for i, summary in summaries.items():
             p, m, stated, cap = adjusted[i]
             # Group-affecting focused corrections need a full-case pass. Keeping
@@ -729,6 +730,19 @@ def play_game(gid, start, dry=False, use_llm=True):
                       "calibration_applied": bool(eligible), "bias": bias, "sigma": sigma, "a_mult": alpha,
                       "independent_recheck": tier.name == "focus",
                       "uncertainty_applied": os.environ.get("PRICING_UNCERTAINTY", "0") == "1"}
+            try:
+                who = {"tier": tier.name, "model": tier.model,
+                       "prompt_hash": identity["prompt_hash"].get(tier.name),
+                       "config_hash": identity["config_hash"].get(tier.name)}
+                corrected, evidence = price_research.adjust(
+                    state, items[i], detail, who, price_memory.hash_policy(policy), gid,
+                    mode=os.environ.get("PRICE_LEARNING", "validated"), category_models=category_models)
+                detail["price_learning"] = evidence
+                if evidence["applied"]:
+                    detail["m_before_price_learning"], detail["m"] = m, corrected
+                    m = corrected
+            except Exception as e:
+                detail["price_learning"] = {"applied": False, "reason": type(e).__name__}
             part[i] = price(p, m, stated, cap, fb[i], uncertainty=summary["log_spread"],
                             bias=bias, sigma=sigma, a_mult=alpha)
             if i in recall_caps:

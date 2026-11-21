@@ -150,6 +150,9 @@ def refresh_once(team, rounds_path, cache_dir, output_path, report_path=None, *,
                 C.atomic_text(report_path, report, deadline=guard)
             C.atomic_json(output_path, json.loads(state_text), deadline=guard)
             status.update(status="updated", games=sorted(new_games),
+                          price_learning={
+                              'validated': sum(c['status'] == 'validated' for c in state.get('price_research', {}).get('cohorts', [])),
+                              'comparisons': sum(c['changed_lines'] for c in state.get('price_research', {}).get('cohorts', []))},
                           parameter_grid_best=state.get("parameter_grid", {}).get("best"),
                           m_research={'status': state.get('m_research', {}).get('status'),
                                       'reused': state.get('m_research', {}).get('reused'),
@@ -214,6 +217,9 @@ class LearningService:
         with self._lock:
             self.status = result
         research = result.get('m_research', {})
+        if result.get('status') == 'updated':
+            import logging
+            logging.getLogger('c2f').info('comparable-price learning: %s', result.get('price_learning', {}))
         if result.get('status') == 'updated' and research.get('best'):
             import logging
             best_m = research['best']
