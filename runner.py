@@ -24,8 +24,6 @@ CASES, OUT = ROOT / "cases", ROOT / "out"
 BASE = "https://c2f.public.quantco.cloud"
 ROUND_SECONDS = 60          # submission window after start_time
 SAFETY = 4                  # stop writing this many seconds before the window closes
-LLM_BUDGET = 30             # seconds after key for all LLM work
-VOTES = 3
 DISAGREE = 1.5              # max/min ratio of votes counted as disagreement
 log = logging.getLogger("c2f")
 
@@ -330,21 +328,38 @@ class KeyPool:
 
 
 POOL = None
-MODEL = "gpt-5.4-mini"
-EXTRA = {}            # optional params, dropped if the model rejects them
-N_OK = True           # one request with n=3 (prompt billed once) until the API refuses
 
 
-def llm_call(messages, n):
+class Tier:
+    """One LLM pipeline. All tiers run in parallel; a higher level overwrites a lower one."""
+    def __init__(self, name, level, model, reasoning, votes, budget):
+        self.name, self.level, self.model, self.votes, self.budget = name, level, model, votes, budget
+        self.extra = {"reasoning_effort": reasoning} if reasoning else {}   # dropped if rejected
+        self.n_ok = True          # one request with n votes (prompt billed once) until refused
+
+
+def build_tiers():
+    env = os.environ.get
+    tiers = [Tier("fast", 1, env("FAST_MODEL") or env("OPENAI_MODEL") or "gpt-5.4-mini",
+                  env("FAST_REASONING", "low"), int(env("FAST_VOTES", "3")), float(env("FAST_BUDGET", "20")))]
+    if env("DEEP_MODEL", "gpt-5.4").lower() != "off":
+        tiers.append(Tier("deep", 2, env("DEEP_MODEL", "gpt-5.4"), env("DEEP_REASONING", "high"),
+                          int(env("DEEP_VOTES", "1")), float(env("DEEP_BUDGET", "50"))))
+    return tiers
+
+
+TIERS = []
+
+
+def llm_call(messages, n, tier):
     import openai
-    global N_OK
     while True:
         name = POOL.current()
         if not name:
             raise NoKeys()
         try:
             return POOL.client(name).chat.completions.create(
-                model=MODEL, messages=messages, n=n, **EXTRA,
+                model=tier.model, messages=messages, n=n, **tier.extra,
                 response_format={"type": "json_schema",
                                  "json_schema": {"name": "line_items", "strict": True, "schema": SCHEMA}})
         except openai.AuthenticationError:
@@ -356,13 +371,13 @@ def llm_call(messages, n):
             POOL.disable(name, quota, "429 insufficient_quota" if quota else "429 rate limit")
         except openai.BadRequestError as e:
             param, msg = getattr(e, "param", None) or "", str(e).lower()
-            dropped = [k for k in list(EXTRA) if k == param or k in msg]
+            dropped = [k for k in list(tier.extra) if k == param or k in msg]
             if dropped:
                 for k in dropped:
-                    EXTRA.pop(k)
-                log.warning("model rejects %s: dropped", dropped)
+                    tier.extra.pop(k)
+                log.warning("%s (%s) rejects %s: dropped", tier.name, tier.model, dropped)
             elif n > 1 and (param == "n" or "'n'" in msg or "n parameter" in msg):
-                N_OK = False
+                tier.n_ok = False
                 raise
             else:
                 raise
@@ -403,8 +418,8 @@ def build_prompt(policy, desc, items):
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
 
 
-def assess(messages, timeout):
-    """Returns (list of votes {index: dict}, usage dict). Votes may be fewer than VOTES."""
+def assess(messages, timeout, tier):
+    """Returns (list of votes {index: dict}, usage dict). Votes may be fewer than tier.votes."""
     usage = {"prompt": 0, "cached": 0, "completion": 0, "calls": 0}
 
     def add(resp):
@@ -417,18 +432,18 @@ def assess(messages, timeout):
         usage["calls"] += 1
         return [parse_vote(c.message.content) for c in resp.choices]
 
-    ex = ThreadPoolExecutor(VOTES)               # no `with`: never block on a hanging call
+    ex = ThreadPoolExecutor(tier.votes)          # no `with`: never block on a hanging call
     try:
-        if N_OK:
-            fut = ex.submit(llm_call, messages, VOTES)
+        if tier.n_ok or tier.votes == 1:
+            fut = ex.submit(llm_call, messages, tier.votes, tier)
             done, _ = wait([fut], timeout=timeout)
             if fut in done and fut.exception() is None:
                 return add(fut.result()), usage
             if fut in done and isinstance(fut.exception(), NoKeys):
                 raise NoKeys()
-            if fut not in done or N_OK:            # timeout or other error: give up
+            if fut not in done or tier.n_ok:       # timeout or other error: give up
                 raise RuntimeError(f"LLM failed: {type(fut.exception()).__name__ if fut in done else 'timeout'}")
-        futs = [ex.submit(llm_call, messages, 1) for _ in range(VOTES)]
+        futs = [ex.submit(llm_call, messages, 1, tier) for _ in range(tier.votes)]
         done, _ = wait(futs, timeout=timeout)
         votes = []
         for f in done:
@@ -454,12 +469,12 @@ def parse_vote(content):
 # ---------------------------------------------------------------- deterministic pricing
 def floor_c(x):
     x = float(x) if x is not None else 0.0
-    return math.floor(x * 100) / 100 if math.isfinite(x) and x > 0 else 0.0
+    return math.floor(round(x * 100, 6)) / 100 if math.isfinite(x) and x > 0 else 0.0   # round: float noise
 
 
 def ceil_c(x):
     x = float(x) if x is not None else 0.0
-    return math.ceil(x * 100) / 100 if math.isfinite(x) and x > 0 else 0.0
+    return math.ceil(round(x * 100, 6)) / 100 if math.isfinite(x) and x > 0 else 0.0   # round: float noise
 
 
 def pos(x):
@@ -509,49 +524,71 @@ def play_game(gid, start, dry=False, use_llm=True):
     d = decrypt(gid, key)
     items = parse_items(d)
     fb = {i: rule_value(it) for i, it in items.items()}
-    submit(gid, {i: (v, v) for i, v in fb.items()}, deadline, dry, "provisional")
+    prov_ok = submit(gid, {i: (v, v) for i, v in fb.items()}, deadline, dry, "provisional")
     t_prov = time.time() - t_key
     log.info("[%s] %d lines, provisional after %.1fs", gid, len(items), t_prov)
 
-    final, usage, mode = {i: (floor_c(v), ceil_c(v)) for i, v in fb.items()}, {}, "rules"
-    if use_llm and POOL.current():
+    rules = {i: (floor_c(v), ceil_c(v)) for i, v in fb.items()}
+    best = {"level": 0, "ab": rules, "tier": "rules"}
+    out, usage, slock = {"rules": rules}, {}, threading.Lock()
+
+    def run_tier(tier, msgs):
         try:
-            msgs = build_prompt(read_text(d, "policy*.txt"), read_text(d, "description*.txt"), items)
-            budget = min(LLM_BUDGET - (time.time() - t_key), deadline - time.time() - 3)
-            voices, usage = assess(msgs, budget)
-            mode = f"llm x{len(voices)}"
+            budget = min(tier.budget - (time.time() - t_key), deadline - time.time() - 3)
+            voices, usage[tier.name] = assess(msgs, budget, tier)
+            part = {}
             for i in items:
                 votes = [v[i] for v in voices if i in v]
                 if votes:
-                    final[i] = price(*aggregate(votes), fb[i])
-                else:
-                    log.warning("[%s] line %d: no vote, rules", gid, i)
+                    part[i] = price(*aggregate(votes), fb[i])
+            out[tier.name] = part
+            with slock:                             # ordered: a slower lower tier never overwrites
+                if tier.level < best["level"]:
+                    log.info("[%s] %s done after %s: not sent", gid, tier.name, best["tier"])
+                    return
+                merged = {**best["ab"], **part}
+                if submit(gid, merged, deadline, dry, tier.name):
+                    best.update(level=tier.level, ab=merged, tier=tier.name)
+            log.info("[%s] %s (%s): %d/%d lines, %.1fs after key, tokens %s", gid, tier.name, tier.model,
+                     len(part), len(items), time.time() - t_key, usage[tier.name])
         except NoKeys:
-            log.error("[%s] all OpenAI keys exhausted: rule-based submission", gid)
+            log.error("[%s] %s: all OpenAI keys exhausted", gid, tier.name)
         except Exception as e:
-            log.error("[%s] LLM error %s: rule-based submission", gid, type(e).__name__)
+            log.error("[%s] %s error %s", gid, tier.name, type(e).__name__)
+
+    if use_llm and POOL.current():
+        msgs = build_prompt(read_text(d, "policy*.txt"), read_text(d, "description*.txt"), items)
+        threads = [threading.Thread(target=run_tier, args=(t, msgs), daemon=True) for t in TIERS]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(timeout=max(0.0, deadline - time.time()))
     elif use_llm:
-        log.error("[%s] no usable OpenAI key: rule-based submission", gid)
-    ok = submit(gid, final, deadline, dry, "final")
-    t_final = time.time() - t_key
-    rec = {"game": gid, "lines": len(items), "mode": mode, "ok": ok, "t_provisional": round(t_prov, 2),
-           "t_final": round(t_final, 2), "usage": usage, "model": MODEL,
-           "items": {i: {**items[i], "a": final[i][0], "b": final[i][1], "rule": round(fb[i], 2)} for i in items}}
+        log.error("[%s] no usable OpenAI key: rule-based submission stands", gid)
+    final = best["ab"]
+    rec = {"game": gid, "lines": len(items), "winner": best["tier"], "ok": prov_ok or best["level"] > 0,
+           "t_provisional": round(t_prov, 2), "t_end": round(time.time() - t_key, 2), "usage": usage,
+           "models": {t.name: t.model for t in TIERS}, "items": items, "tiers": out}
     jlog("rounds.jsonl", rec)
-    log.info("[%s] FINAL %s, mode %s, %.1fs, tokens %s, sum a %.0f", gid, "ok" if ok else "FAILED",
-             mode, t_final, usage or "-", sum(a for a, _ in final.values()))
+    log.info("[%s] DONE winner %s, sum a %.0f", gid, best["tier"], sum(a for a, _ in final.values()))
     return rec
 
 
 # ---------------------------------------------------------------- preflight and loop
 def check():
     print("TEAM_API_KEY:", "set" if os.environ.get("TEAM_API_KEY") else "MISSING")
-    print("OpenAI keys:", POOL.names or "NONE (rules only)", "| model:", MODEL)
+    print("OpenAI keys:", POOL.names or "NONE (rules only)")
+    print("tiers:", [(t.name, t.model, t.extra.get("reasoning_effort"), t.votes) for t in TIERS])
     print("7z:", shutil.which("7z") or shutil.which("7zz") or "not found, using pyzipper")
-    for n in POOL.names:
+    for k, n in enumerate(POOL.names):
         try:
-            POOL.client(n).models.retrieve(MODEL)
-            print(f"  {n}: ok, model reachable")
+            c = POOL.client(n)
+            for t in TIERS:
+                c.models.retrieve(t.model)
+            print(f"  {n}: ok, tier models reachable")
+            if k == 0:
+                ids = sorted(m.id for m in c.models.list() if m.id.startswith(("gpt", "o")))
+                print("  models on this key:", ", ".join(ids))
         except Exception as e:
             print(f"  {n}: {type(e).__name__}")
     zips = sorted(CASES.rglob("*.zip"))
@@ -570,7 +607,8 @@ def check():
 
 def run_forever(dry, use_llm):
     done = set()
-    log.info("runner up: pid %d on %s, keys %s, model %s", os.getpid(), socket.gethostname(), POOL.names, MODEL)
+    log.info("runner up: pid %d on %s, keys %s, tiers %s", os.getpid(), socket.gethostname(), POOL.names,
+             [(t.name, t.model) for t in TIERS])
     while True:
         try:
             games = list_games()
@@ -600,7 +638,7 @@ def run_forever(dry, use_llm):
 
 
 def main():
-    global POOL, MODEL
+    global POOL, TIERS
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", type=int, help="play this game now (0 = test game)")
     ap.add_argument("--check", action="store_true")
@@ -608,9 +646,7 @@ def main():
     ap.add_argument("--no-llm", action="store_true", help="rules only")
     args = ap.parse_args()
     load_env()
-    MODEL = os.environ.get("OPENAI_MODEL") or MODEL
-    if os.environ.get("OPENAI_REASONING"):
-        EXTRA["reasoning_effort"] = os.environ["OPENAI_REASONING"]
+    TIERS = build_tiers()
     POOL = KeyPool()
     setup_logging()
     if args.check:
