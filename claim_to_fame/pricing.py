@@ -123,14 +123,26 @@ def aggregate(votes, *, disagree):
     return tuple(estimate[key] for key in ("p", "m", "stated", "cap", "shared"))
 
 
-def select_focus_items(items, estimates, limit=2):
+def select_focus_items(items, estimates, limit=2, min_p=0.5):
     """Select the largest estimated line, then other lines by monetary disagreement impact.
 
     This is a call-budget priority, not an estimate of expected profit. Missing estimates
     get no invented price anchor. Returns an invoice subset for build_focus_prompt.
+    Lines judged not covered (p < min_p, so b = 0 and a is mostly rejected) are skipped:
+    offline G5-G18 the focus otherwise spent its budget on uncovered installation,
+    liability or painter lines in 5 of 9 games instead of the expensive covered ones.
     """
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
         raise ValueError("limit must be a nonnegative integer")
+
+    def covered(index):
+        estimate = estimates.get(index, estimates.get(str(index), {}))
+        if not isinstance(estimate, Mapping) or estimate.get("p") is None:
+            return True                         # unknown coverage: keep the old behaviour
+        p = pos(estimate.get("p"))
+        return p is not None and p >= min_p
+
+    items = {i: v for i, v in items.items() if covered(i)}
     if not limit or not items:
         return {}
 

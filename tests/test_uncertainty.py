@@ -155,6 +155,13 @@ class FocusPromptTests(unittest.TestCase):
         self.assertEqual(pricing.select_focus_items(self.items, self.estimates, limit=0), {})
         self.assertEqual(len(pricing.select_focus_items(self.items, self.estimates, limit=10)), 3)
 
+    def test_uncovered_lines_are_not_focused(self):
+        estimates = {**self.estimates, 1: {"m": 1000, "p": 0.0, "log_spread": 0}, 9: {"m": 600, "p": 0.99}}
+        self.assertEqual(list(pricing.select_focus_items(self.items, estimates, limit=2)), [9, 4])
+        self.assertEqual(list(pricing.select_focus_items({1: self.items[1]}, estimates, limit=2)), [])
+        estimates[1]["p"] = 0.5
+        self.assertEqual(list(pricing.select_focus_items(self.items, estimates, limit=1)), [1])
+
     def test_focus_prompt_requires_exact_subset_with_original_context(self):
         subset = {i: self.items[i] for i in (1, 4)}
         messages = prompts.build_focus_prompt("Original policy clause", "Original damage context", subset,
