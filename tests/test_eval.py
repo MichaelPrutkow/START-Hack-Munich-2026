@@ -1,5 +1,6 @@
 """Historical evaluations must use their own source revision, including split modules."""
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import sys
@@ -74,3 +75,24 @@ class SnapshotTests(unittest.TestCase):
         self.assertIs(sys.modules["claim_to_fame.pricing"], pricing)
         self.assertIs(sys.modules["claim_to_fame.prompts"], prompts)
         self.assertEqual(sys.path, saved_path)
+
+    def test_lazy_imports_keep_using_historical_revision(self):
+        package = self.root / "claim_to_fame"
+        package.mkdir()
+        (package / "__init__.py").write_text("")
+        (package / "pricing.py").write_text("MARKER = 'historical'\n")
+        (self.root / "runner.py").write_text(
+            "def later():\n    from claim_to_fame.pricing import MARKER\n    return MARKER\n")
+        self.commit()
+        old = E.load_old("HEAD")
+        self.assertEqual(old.later(), "historical")
+        self.assertEqual(old.later(), "historical")
+        self.assertIs(sys.modules["claim_to_fame.pricing"], pricing)
+
+    def test_environment_settings_refresh_after_module_import(self):
+        (self.root / "runner.py").write_text("A_MULT = 0.85\nSIGMA = 0.35\nDISAGREE = 1.5\n")
+        self.commit()
+        old = E.load_old("HEAD")
+        with patch.dict(os.environ, {"A_MULT": "0.73", "SIGMA": "0.42", "DISAGREE": "2"}):
+            E.refresh_settings(old)
+        self.assertEqual((old.A_MULT, old.SIGMA, old.DISAGREE), (0.73, 0.42, 2))

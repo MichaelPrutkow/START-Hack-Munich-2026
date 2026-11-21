@@ -60,11 +60,18 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 10 | Runner modularisieren, Einstiegspunkte erhalten, offline verifizieren | [X] | fertig | `runner.py`, `claim_to_fame/`, `eval_cases.py`, `test_runner.py`, `tests/`, `README.md`, `.env.example` |
 | 11 | Michaels neue Commits mit lokalem Refactor zusammenführen, offline prüfen, nicht pushen | [X] | fertig | `AGENTS.md`, `README.md`, Merge von `origin/main` |
 
+
+| 12 | Backtest tatsächlicher Abgaben, Unsicherheitsgrenzen und Evaluation korrigieren | [X/eval] | fertig | `calibrate.py`, `eval_cases.py`, `tests/test_backtest.py` |
+| 13 | Lernspeicher, Verlustanalyse und validierte Kalibrierung nach Runden | [X/feedback] | fertig | `claim_to_fame/feedback.py`, `learn.py`, `tests/test_feedback.py` |
+| 14 | Preisunsicherheit erhalten und fokussierte Prüfung unterstützen | [X/pricing] | fertig | `claim_to_fame/pricing.py`, `claim_to_fame/prompts.py`, `tests/test_uncertainty.py` |
+| 15 | Runner-Integration, Dokumentation und Pitch | [X] | fertig | `runner.py`, `watch.py`, `tests/test_runtime.py`, `README.md`, `.env.example`, `writeup/`, `AGENTS.md` |
+
 ## Offene Fragen
 
 - [x] Welche Challenge? → QuantCo. [U]
 - [ ] Zählen späte Runden mehrfach (August: letzte 20 dreifach)? → Orga/Discord fragen. [X]
 - [ ] Höhe der absoluten Untergrenze von `c`. [X]
+- [x] Bearbeitung von `calibrate.py` trotz laufender [C]-Aufgabe: User beauftragt am 21.11. alle vorgeschlagenen Verbesserungen; [X/eval] korrigiert Evaluation, bestehende Kalibrierung bleibt kompatibel. [X]
 - [ ] Dürfen August-Preisanker und automatisiert gelesene Leaderboard-Transaktionen genutzt werden? → Orga fragen. [X]
   - ✓ Leaderboard: Scrapen erlaubt, nur nicht im Millisekundentakt (Orga, mündlich an Michael, 21.11. 14:11). August-Daten: weiter nicht nutzen (Michaels Regel). [U/C]
 - [ ] Format und genaue Frist des Write-ups (max. 1 Seite). [X]
@@ -169,3 +176,19 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Nur Dokumentationskonflikte in `README.md` und `AGENTS.md`: Watcher-Erklärung, Modulübersicht und beide Übergaben erhalten. `watch.py` und `notes/DECISIONS.md` unverändert vom Remote übernommen. README ergänzt den expliziten Pull-Befehl `git pull --no-rebase`; keine globale Git-Konfiguration geändert.
 - Verifikation: `.venv/bin/python -B test_runner.py` — 12 bestanden, 1 mangels Case-0-PDF übersprungen; zusätzlicher Offline-Smoke-Test von `watch.report` mit synthetischen Transaktionen bestanden. Keine API-/LLM-Aufrufe, kein Runner oder Watcher gestartet.
 - Status: lokal integriert und getestet. Nächster Schritt: User prüft den Merge; Push bleibt ausdrücklich ausgesetzt.
+
+### 21.11.2026 · Codex · Umfang der Verbesserungen
+
+- User beauftragt Evaluation, Lernspeicher, Preisunsicherheit, fokussierte Prüfung und Write-up/Pitch. API-Key-Nutzung ausdrücklich ausgenommen: übernimmt Michaels LLM. KeyPool, llm_call und Schlüsselkonfiguration bleiben hier unverändert.
+- Umsetzung und Offline-Prüfung zunächst im isolierten lokalen Klon; keine Live-Abgaben, kein Push.
+
+### 21.11.2026 · Codex · Evaluation, Lernschleife und gezielte Prüfung umgesetzt
+
+- User-Auftrag: alle fünf Verbesserungen aus dem Projekt-Audit; API-Key-Nutzung ausdrücklich ausgenommen, da Michaels LLM diese übernimmt. Die Funktionen `KeyPool`, `llm_call`, `assess`, `load_env`, `build_tiers`, `check` und `Redact` sind per AST-Vergleich unverändert.
+- Evaluation bewertet tatsächliche a/b inkl. Dokumentbeträgen und Caps; zensierte Forderungen bleiben Intervalle. Historische Imports, Modell-/Stimmenbudget und Konfiguration sind vergleichbar; explizite Baseline und chronologischer Holdout. Alte heuristische Backtest-Gewinne gelten nicht als Beleg für diese Fassung.
+- `claim_to_fame/feedback.py` + `learn.py`: vollständige Abgaben/Abrechnungen abgleichen, Verlustgrenzen je Zeile/Tier, gleicher Policen-/Mengen-/Einheitenkontext für Recall, private atomare Artefakte. Validierte Preis-Kalibrierung erst nach mindestens 6 Spielen, 16 gedeckten Trainingszeilen und 8 späteren Prüfzeilen mit konservativ >=5% Gewinn; Prüfung enthält auch falsche Deckungsprognosen. Alte Logs ohne eindeutige finale Abgabe bleiben ausgeschlossen.
+- Runner speichert `final_ab`, `line_sources`, Stimmen, Identitäten und Lernprovenienz. Median statt oberer Stimmen bei Uneinigkeit; Konsistenz-Auswahl je Position; gemeinsame Caps atomar. Optionaler Fokus auf bis zu 2 Positionen mit 2 Stimmen, maximal 12 s im Restbudget. `PRICING_UNCERTAINTY=0` bleibt Standard, Spread-Haircut unbewiesen.
+- `watch.py --learn` auf Philips Mac aktualisiert nach abgeschlossenen Runden `out/learning.json` und `out/learning-report.md`; Runner liest lokal zum nächsten Spiel. Keine Abgaben durch Watcher/Lerner. Neue Daten bleiben unter ignoriertem `out/`.
+- `README.md`, `.env.example`, `writeup/ONE_PAGE.md`, `writeup/PITCH.md` fertig; Spiel-8-Zahlen explizit Zwischenstand. Kein behaupteter Produktions-Gewinn. Getrennte gleich hohe Shared Caps sind im bisherigen Schema weiterhin nicht eindeutig unterscheidbar.
+- Verifikation: 73 Offline-Tests, davon 72 bestanden und 1 mangels Case-0-PDF übersprungen; synthetische Frist-/Fokus-/Mischabgabe-/Caps-/Kalibrierungsfälle, 400 synthetische Auszahlungsfälle zur Einschließung der verborgenen wahren Werte, keine Live-Abgaben oder Strategie-LLM-Aufrufe. Echter Case-0-PDF-Test mangels entschlüsselter Datei übersprungen.
+- Integration lokal auf `codex/round-feedback`; nicht pushen. Nächster Team-Schritt: mit Michaels Key-Änderungen integrieren, nur auf Philips Mac zwischen Spielfenstern neu starten und dort Watcher mit `--learn` aktivieren.
