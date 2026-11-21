@@ -221,12 +221,26 @@ def header_map(low):
             pick(("unit", "einheit"), 3))
 
 
+# Line ends with quantity + unit (TOTAL column is empty): greedy description takes the LAST
+# number+unit, so "Cable 3 m  2 pcs" reads 2 pcs, not 3 m. LINE_RE stays as fallback.
+LINE_END_RE = re.compile(rf"^\s*(\d{{1,3}})\s+(.+)\s+(\d+(?:[.,]\d+)?)\s+({UNITS})\s*$", re.I)
+STOP_RE = re.compile(r"^\s*(created on|page \d|sub-?total\b|total\b|vat\b|net\b|gross\b|invoice\b|items\b|pos\b|from\b)", re.I)
+
+
 def parse_lines(lines):
-    items = {}
+    """Item rows plus wrapped description lines (appended to the item above, max 3)."""
+    items, cur, extra = {}, None, 0
     for ln in lines:
-        m = LINE_RE.match(ln)
+        m = LINE_END_RE.match(ln) or LINE_RE.match(ln)
         if m:
-            items.setdefault(int(m[1]), {"description": m[2].strip(), "quantity": num(m[3]), "unit": m[4]})
+            i = int(m[1])
+            cur, extra = (i, 0) if i not in items else (None, 0)
+            items.setdefault(i, {"description": m[2].strip(), "quantity": num(m[3]), "unit": m[4]})
+        elif cur is not None and ln.strip() and not STOP_RE.match(ln) and extra < 3:
+            items[cur]["description"] += " " + ln.strip()
+            extra += 1
+        else:
+            cur = None
     return items
 
 
@@ -504,13 +518,28 @@ def aggregate(votes):
     return p, m, majority("stated_value"), majority("stated_cap")
 
 
+# a and b relative to m (our median of t), from the official payoff table:
+# - accepting an incoming a pays off iff P(t >= a) > 2/3, so b = the point where
+#   p * P(T >= b) = 2/3 with T ~ m * exp(SIGMA * Z); b = 0 if p <= 2/3.
+# - charging: a * P(t >= a) peaks below m; a = A_MULT * m (payoff sim: 0.9 robust).
+A_MULT = float(os.environ.get("A_MULT", "0.9"))
+SIGMA = float(os.environ.get("SIGMA", "0.35"))
+
+
+def b_mult(p):
+    if p <= 2 / 3:
+        return 0.0
+    return math.exp(SIGMA * statistics.NormalDist().inv_cdf(max(1e-6, 1 - 2 / (3 * p))))
+
+
 def price(p, m, stated, cap, fallback):
     if stated:
         a = stated
         b = stated if p > 2 / 3 else 0.0
     else:
-        a = m if m > 0 else fallback                # t = 0 lines still charge: costs nothing if rejected
-        b = a if p > 2 / 3 else 0.0                 # accept if 1.5*P(fair) > 1, i.e. P(fair) > 2/3
+        base = m if m > 0 else fallback             # t = 0 lines still charge: costs nothing if rejected
+        a = A_MULT * base
+        b = b_mult(p) * base
     if cap:
         a, b = min(a, cap), min(b, cap)
     return floor_c(a), ceil_c(b)
@@ -639,7 +668,7 @@ def run_forever(dry, use_llm):
 
 
 def main():
-    global POOL, TIERS
+    global POOL, TIERS, A_MULT, SIGMA
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", type=int, help="play this game now (0 = test game)")
     ap.add_argument("--check", action="store_true")
@@ -647,6 +676,7 @@ def main():
     ap.add_argument("--no-llm", action="store_true", help="rules only")
     args = ap.parse_args()
     load_env()
+    A_MULT, SIGMA = float(os.environ.get("A_MULT", A_MULT)), float(os.environ.get("SIGMA", SIGMA))
     TIERS = build_tiers()
     POOL = KeyPool()
     setup_logging()
