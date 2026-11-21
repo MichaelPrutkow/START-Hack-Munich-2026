@@ -20,7 +20,7 @@ The difficult part is learning when the true fair price stays hidden. An accepte
 
 Our learning report separates expensive reviewer mistakes from issuer opportunity losses. Recall matches policy, quantity, unit, and description; it keeps previous coverage judgments separate from price evidence.
 
-A calibration candidate must be trained on earlier games and tested on later games. It needs sufficient samples and at least five percent improvement in its conservative held-out result before activation. Uncertain-coverage predictions remain in that validation, so the test cannot quietly discard difficult cases.
+Between rounds, automatic learning adjusts price bias, spread and the charge multiplier using earlier games. The frozen candidate then needs sufficient samples and at least five percent improvement on later games before activation. Eligible coverage mistakes remain in that validation. A replacement must also beat the active calibration.
 
 **2:10–3:00 · Evidence and limits**
 
@@ -46,7 +46,7 @@ Chronological separation, matching model/prompt/configuration identities, and mi
 
 **How do you control time and cost?**
 
-We submit a complete fallback before model analysis, enforce tier budgets and a submission deadline, and log token usage. Focused review is optional and uses remaining time. The learning report is offline by default and requires no model calls.
+We submit a complete fallback before model analysis, enforce tier budgets and a submission deadline, and log token usage. Focused review is optional and uses remaining time. Background learning uses bounded public-data requests between rounds and no model calls. Reports can also be rebuilt entirely from cached data.
 
 **Can historical recall transfer the wrong coverage or price?**
 

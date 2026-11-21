@@ -13,9 +13,11 @@ are never printed or logged.
   flags: --dry (no PUT), --no-llm (rules only)
 """
 import argparse
+import ast
 import datetime as dt
 import fcntl
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -32,7 +34,7 @@ from pathlib import Path
 
 import requests
 
-from claim_to_fame import pricing
+from claim_to_fame import pricing, prompts
 from claim_to_fame import feedback
 from claim_to_fame.invoices import (
     FALLBACK_LINE, FALLBACK_MAX, LINE_END_RE, LINE_RE, STOP_RE, UNIT_RATE, UNITS,
@@ -382,8 +384,8 @@ def b_mult(p):
     return pricing.b_mult(p, sigma=SIGMA)
 
 
-def price(p, m, stated, cap, fallback, *, uncertainty=0.0, bias=1.0, sigma=None):
-    return pricing.price(p, m, stated, cap, fallback, a_mult=A_MULT,
+def price(p, m, stated, cap, fallback, *, uncertainty=0.0, bias=1.0, sigma=None, a_mult=None):
+    return pricing.price(p, m, stated, cap, fallback, a_mult=A_MULT if a_mult is None else a_mult,
                          sigma=SIGMA if sigma is None else sigma,
                          uncertainty=uncertainty, bias=bias,
                          uncertainty_aware=os.environ.get("PRICING_UNCERTAINTY", "0") == "1")
@@ -399,24 +401,81 @@ def configure_pricing():
     A_MULT, SIGMA, DISAGREE = values
 
 
+ENV_PATH = ROOT / ".env"
+SETTINGS_SOURCE = "env"
+AUTO_TUNE = True
+TUNABLE = ("A_MULT", "SIGMA", "DISAGREE", "AUTO_TUNE")
+
+
+def read_env(path):
+    """{key: value} of a .env file (empty values skipped); unlike load_env, no side effects."""
+    out = {}
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip().removeprefix("export ").strip(), v.strip().strip('"').strip("'")
+        if v:
+            out[k] = v
+    return out
+
+
+def refresh_settings():
+    """Re-read manual defaults each game. AUTO_TUNE gates validated per-line learning.
+
+    Exploratory params.json proposals have no independent holdout/estimator identity;
+    only feedback.py's matching validated policy may override defaults. Never raises.
+    """
+    global A_MULT, SIGMA, DISAGREE, SETTINGS_SOURCE, AUTO_TUNE
+    try:
+        env = {**{k: os.environ[k] for k in TUNABLE if k in os.environ}, **read_env(ENV_PATH)}
+        a, s = float(env.get("A_MULT", A_MULT)), float(env.get("SIGMA", SIGMA))
+        dis, src = float(env.get("DISAGREE", DISAGREE)), "env"
+        auto = env.get("AUTO_TUNE", "1") != "0"
+        if not all(math.isfinite(x) and x > 0 for x in (a, s, dis)) or dis < 1:
+            raise ValueError(f"bad settings A_MULT {a} SIGMA {s} DISAGREE {dis}")
+        if (a, s, dis) != (A_MULT, SIGMA, DISAGREE):
+            log.info("settings: A_MULT %.3f -> %.3f, SIGMA %.3f -> %.3f, DISAGREE %.2f -> %.2f (%s)",
+                     A_MULT, a, SIGMA, s, DISAGREE, dis, src)
+        A_MULT, SIGMA, DISAGREE, SETTINGS_SOURCE, AUTO_TUNE = a, s, dis, src, auto
+    except Exception as e:
+        log.warning("settings refresh failed, keeping A_MULT %.3f SIGMA %.3f: %s", A_MULT, SIGMA, e)
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def strategy_identity():
-    """Identify the estimator/configuration that produced training observations."""
-    config = {"a_mult": A_MULT, "sigma": SIGMA, "disagree": DISAGREE,
-              "aggregation": "median-spread-v1", "selection": "evidence-v1",
-              "uncertainty_pricing": os.environ.get("PRICING_UNCERTAINTY", "0"),
-              "source": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-                         for name in ("runner.py", "claim_to_fame/pricing.py", "claim_to_fame/prompts.py")},
-              "focus": os.environ.get("FOCUS_ENABLED", "1"),
-              "focus_lines": os.environ.get("FOCUS_MAX_LINES", "2"),
-              "focus_budget": os.environ.get("FOCUS_BUDGET", "12"),
-              "tiers": {t.name: {"model": t.model, "votes": t.votes, "extra": t.extra}
-                        for t in TIERS}}
-    return {"prompt_hash": digest({"system": SYSTEM, "schema": SCHEMA}),
-            "config_hash": digest(config), "config": config}
+    """Stable per-estimator identity; changing prices/logging does not erase evidence."""
+    def code(fn):
+        return digest(ast.dump(ast.parse(inspect.getsource(fn)), include_attributes=False))
+    common = {"aggregation": code(pricing.estimate_votes), "number_validation": code(pricing._number),
+              "shared_caps": code(apply_shared_caps),
+              "selection": code(prefer_estimate), "quality": code(estimate_quality),
+              "disagree": DISAGREE}
+    prompt = {"system": SYSTEM, "schema": SCHEMA, "builder": code(build_prompt),
+              "policy_amounts": code(policy_amounts), "context": code(prompts._context_text),
+              "amount_pattern": AMOUNT_RE.pattern,
+              "recall": code(feedback.context_for_items), "recall_tokens": code(feedback._tokens),
+              "units": code(norm_unit)}
+    configs, prompt_hashes = {}, {}
+    tiers = list(TIERS)
+    deep = next((t for t in tiers if t.name == "deep"), None)
+    if deep is not None:
+        tiers.append(Tier("focus", deep.level + 0.5, deep.model,
+                          deep.extra.get("reasoning_effort"), 2, 12))
+    for tier in tiers:
+        configs[tier.name] = {**common, "model": tier.model, "votes": tier.votes,
+                              "extra": dict(tier.extra), "tier": tier.name}
+        prompt_hashes[tier.name] = digest({**prompt, **({"focus": code(build_focus_prompt),
+                                                   "focus_selection": code(pricing.select_focus_items)}
+                                                   if tier.name == "focus" else {})})
+    return {"prompt_hash": prompt_hashes, "config_hash": {k: digest(v) for k, v in configs.items()},
+            "config": configs, "pricing_defaults": {"a_mult": A_MULT, "sigma": SIGMA}}
 
 
 def estimate_quality(estimate):
@@ -494,6 +553,9 @@ def play_game(gid, start, dry=False, use_llm=True):
     state_path = Path(os.environ.get("LEARNING_FILE", str(OUT / "learning.json")))
     state = feedback.load_state(state_path, before_game=gid) if gid else None
     history = feedback.context_for_items(state, items, policy) if state else ""
+    log.info("[%s] learning: %s; completed game %s; recalled context %d chars", gid,
+             "available" if state else "no usable artifact; baseline parameters",
+             state.get("max_game") if state else "-", len(history))
     best = {"ab": rules, "tier": "rules", "est": {},
             "sources": {i: "rules" for i in items}, "levels": {i: 0 for i in items}}
     out, usage, est, vote_log = {"rules": rules}, {}, {}, {}
@@ -517,8 +579,16 @@ def play_game(gid, start, dry=False, use_llm=True):
                               e.get("cap_raw", e.get("cap")), e.get("shared"))
         adjusted = apply_shared_caps(all_raw)
         calibration = feedback.calibration_for(
-            state, tier.name, model=tier.model, prompt_hash=identity["prompt_hash"],
-            config_hash=identity["config_hash"]) if state else None
+            state, tier.name, model=tier.model, prompt_hash=identity["prompt_hash"].get(tier.name),
+            config_hash=identity["config_hash"].get(tier.name)) if state else None
+        diagnostic = feedback.calibration_status(
+            state, tier.name, model=tier.model, prompt_hash=identity["prompt_hash"].get(tier.name),
+            config_hash=identity["config_hash"].get(tier.name))
+        if not AUTO_TUNE:
+            diagnostic = {"status": "disabled", "reason": "AUTO_TUNE=0; manual defaults pinned"}
+        elif os.environ.get("PRICING_UNCERTAINTY", "0") == "1":
+            diagnostic = {"status": "disabled", "reason": "experimental uncertainty policy has no matching validation"}
+        log.info("[%s] %s learning: %s", gid, tier.name, diagnostic)
         part, details = {}, {}
         for i, summary in summaries.items():
             p, m, stated, cap = adjusted[i]
@@ -527,17 +597,19 @@ def play_game(gid, start, dry=False, use_llm=True):
             if set(selected_items) != set(items) and (summary.get("shared") is not None or
                     previous.get(i, {}).get("shared") is not None):
                 continue
-            eligible = (calibration and p >= calibration.get("min_covered_prob", 0.9)
+            eligible = (AUTO_TUNE and calibration and os.environ.get("PRICING_UNCERTAINTY", "0") != "1"
+                        and p >= calibration.get("min_covered_prob", 0.9)
                         and m > 0 and stated is None and cap is None and summary.get("shared") is None)
             bias = calibration["bias"] if eligible else 1.0
             sigma = calibration["sigma"] if eligible else SIGMA
+            alpha = calibration.get("a_mult", A_MULT) if eligible else A_MULT
             detail = {**summary, "p": p, "m": m, "m_raw": summary["m"],
                       "stated": stated, "stated_raw": summary["stated"], "cap": cap,
                       "cap_raw": summary["cap"],
-                      "calibration_applied": bool(eligible), "bias": bias, "sigma": sigma,
+                      "calibration_applied": bool(eligible), "bias": bias, "sigma": sigma, "a_mult": alpha,
                       "uncertainty_applied": os.environ.get("PRICING_UNCERTAINTY", "0") == "1"}
             part[i] = price(p, m, stated, cap, fb[i], uncertainty=summary["log_spread"],
-                            bias=bias, sigma=sigma)
+                            bias=bias, sigma=sigma, a_mult=alpha)
             details[i] = detail
         return part, details
 
@@ -616,7 +688,7 @@ def play_game(gid, start, dry=False, use_llm=True):
                "usage": dict(usage), "models": {t.name: t.model for t in TIERS},
                "items": items, "tiers": dict(out), "est": dict(est), "votes": dict(vote_log),
                "final_ab": final, "line_sources": best["sources"].copy(),
-               "a_mult": A_MULT, "sigma": SIGMA, **identity,
+               "a_mult": A_MULT, "sigma": SIGMA, "settings": SETTINGS_SOURCE, **identity,
                "policy_hash": hashlib.sha256(policy.encode()).hexdigest(),
                "learning_version": state.get("schema_version") if state else None,
                "learning_max_game": state.get("max_game") if state else None,
@@ -659,7 +731,29 @@ def check():
         print("game API:", type(e).__name__, getattr(getattr(e, "response", None), "status_code", ""))
 
 
+def make_learning_service(dry):
+    """Only the live scheduled runner starts background public-result collection."""
+    if dry or os.environ.get("LEARNING_AUTO", "1") == "0":
+        return None
+    from claim_to_fame.learning_service import LearningService
+    output = Path(os.environ.get("LEARNING_FILE", str(OUT / "learning.json")))
+    return LearningService(
+        team=os.environ.get("TEAM_NAME", "chineseModels"), rounds_path=OUT / "rounds.jsonl",
+        cache_dir=OUT / "leaderboard", output_path=output,
+        report_path=output.with_name("learning-report.md"))
+
+
 def run_forever(dry, use_llm):
+    learning = make_learning_service(dry)
+    log.info("automatic learning %s", "enabled between rounds" if learning else "disabled")
+    try:
+        return run_schedule(dry, use_llm, learning)
+    finally:
+        if learning is not None:
+            learning.close()
+
+
+def run_schedule(dry, use_llm, learning=None):
     done = set()
     log.info("runner up: pid %d on %s, keys %s, tiers %s", os.getpid(), socket.gethostname(), POOL.names,
              [(t.name, t.model) for t in TIERS])
@@ -671,6 +765,11 @@ def run_forever(dry, use_llm):
             time.sleep(5)
             continue
         now = time.time()
+        if learning is not None:
+            try:
+                learning.tick(games, now=now)
+            except Exception as exc:
+                log.warning("learning refresh deferred: %s", type(exc).__name__)
         todo = [(g, s) for g, s in games if g != 0 and g not in done and s + ROUND_SECONDS - SAFETY > now]
         if not todo:
             time.sleep(30)
@@ -683,6 +782,7 @@ def run_forever(dry, use_llm):
             find_zip(gid)
         except FileNotFoundError:
             log.critical("[%s] ZIP MISSING in cases/ - download it now!", gid)
+        refresh_settings()
         time.sleep(max(0.0, start - time.time() - 0.2))
         try:
             play_game(gid, start, dry, use_llm)

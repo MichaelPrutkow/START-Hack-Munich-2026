@@ -188,19 +188,50 @@ class RuntimeTests(unittest.TestCase):
 
     def test_validated_learning_only_applies_to_eligible_pricing(self):
         self.prepare_round([R.Tier("fast", 1, "fake", None, 3, 20)])
-        state = {"schema_version": 1, "max_game": 3, "created_at": "2026-11-21T00:00:00+00:00"}
+        state = {"schema_version": R.feedback.SCHEMA_VERSION, "max_game": 3,
+                 "created_at": "2026-11-21T00:00:00+00:00"}
         self.enterContext(patch.object(R.feedback, "load_state", return_value=state))
+        self.enterContext(patch.object(R, "strategy_identity", return_value=R.strategy_identity()))
         self.enterContext(patch.object(R.feedback, "context_for_items", return_value="past range evidence"))
         self.enterContext(patch.object(R.feedback, "calibration_for", return_value={
-            "bias": 0.8, "sigma": 0.4, "min_covered_prob": 0.9}))
+            "bias": 0.8, "sigma": 0.4, "a_mult": 0.7, "min_covered_prob": 0.9}))
         self.enterContext(patch.object(R, "assess", return_value=([
             {1: {"covered_prob": 1, "t_if_covered": 100},
              4: {"covered_prob": 1, "t_if_covered": 100, "stated_value": 50}}
             for _ in range(3)], {})))
         rec = R.play_game(4, time.time(), dry=True)
-        self.assertEqual(rec["final_ab"][1][0], 68)
+        self.assertEqual(rec["final_ab"][1][0], 56)
         self.assertEqual(rec["final_ab"][4], (50, 50))
         self.assertTrue(rec["est"]["fast"][1]["calibration_applied"])
+        self.assertEqual(rec["est"]["fast"][1]["a_mult"], 0.7)
+        self.assertEqual(rec["est"]["fast"][1]["m"], 100)
+        self.assertEqual(rec["a_mult"], 0.85)
         self.assertFalse(rec["est"]["fast"][4]["calibration_applied"])
         self.assertEqual(rec["learning_max_game"], 3)
-        self.assertEqual(rec["learning_version"], 1)
+        self.assertEqual(rec["learning_version"], R.feedback.SCHEMA_VERSION)
+
+    def test_experimental_uncertainty_does_not_apply_incompatible_calibration(self):
+        self.prepare_round([R.Tier("fast", 1, "fake", None, 3, 20)])
+        self.enterContext(patch.dict(os.environ, {"PRICING_UNCERTAINTY": "1"}))
+        self.enterContext(patch.object(R.feedback, "calibration_for", return_value={
+            "bias": 0.8, "sigma": 0.4, "a_mult": 0.7, "min_covered_prob": 0.9}))
+        self.enterContext(patch.object(R, "assess", return_value=([
+            {i: {"covered_prob": 1, "t_if_covered": 100} for i in (1, 4)}
+            for _ in range(3)], {})))
+        rec = R.play_game(4, time.time(), dry=True)
+        for detail in rec["est"]["fast"].values():
+            self.assertFalse(detail["calibration_applied"])
+            self.assertTrue(detail["uncertainty_applied"])
+            self.assertEqual((detail["a_mult"], detail["bias"], detail["sigma"]), (0.85, 1.0, 0.35))
+
+    def test_manual_pin_disables_otherwise_validated_parameters(self):
+        self.prepare_round([R.Tier("fast", 1, "fake", None, 3, 20)])
+        self.enterContext(patch.object(R, "AUTO_TUNE", False))
+        self.enterContext(patch.object(R.feedback, "calibration_for", return_value={
+            "bias": 0.8, "sigma": 1.0, "a_mult": 0.7, "min_covered_prob": 0.9}))
+        self.enterContext(patch.object(R, "assess", return_value=([
+            {i: {"covered_prob": 1, "t_if_covered": 100} for i in (1, 4)}
+            for _ in range(3)], {})))
+        rec = R.play_game(4, time.time(), dry=True)
+        self.assertEqual(rec["final_ab"][1][0], 85)
+        self.assertFalse(rec["est"]["fast"][1]["calibration_applied"])

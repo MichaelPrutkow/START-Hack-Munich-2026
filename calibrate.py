@@ -17,6 +17,10 @@ the ratio t/m (bias -> A_MULT, spread -> SIGMA) and a backtest of the runner's a
 A_MULT x SIGMA against the teams' real a and b.
 """
 import argparse, json, math, statistics, time
+import fcntl
+import os
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import requests
@@ -26,40 +30,288 @@ CACHE = Path(__file__).resolve().parent / "out" / "leaderboard"
 PAUSE = 1.0
 
 
-def get(path, **params):
+class DeadlineExceeded(TimeoutError):
+    """The between-round refresh must yield before another network request/write."""
+
+
+class IncompleteGame(ValueError):
+    """Publication is absent, incomplete, or inconsistent; retry a later refresh."""
+
+
+class RefreshBusy(RuntimeError):
+    """Another process owns this refresh/cache lock."""
+
+
+class SettlementMismatch(IncompleteGame):
+    """Transaction net conflicts with a published per-game matrix cell."""
+
+
+def check_deadline(deadline=None, *, clock=time.time, reserve=0.0):
+    end = deadline() if callable(deadline) else deadline
+    remaining = math.inf if end is None else end - clock()
+    if remaining <= reserve:
+        raise DeadlineExceeded("refresh deadline reached")
+    return remaining
+
+
+def strict_json(text):
+    def reject(value):
+        raise ValueError("non-finite JSON")
+    return json.loads(text, parse_constant=reject)
+
+
+def atomic_json(path, data, *, deadline=None):
+    """Publish private JSON only after complete serialization and another deadline check."""
+    text = json.dumps(data, ensure_ascii=False, allow_nan=False) + "\n"
+    atomic_text(path, text, deadline=deadline)
+
+
+def atomic_text(path, text, *, deadline=None):
+    path = Path(path)
+    check_deadline(deadline)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        check_deadline(deadline)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+@contextmanager
+def cache_lock(path, *, deadline=None):
+    check_deadline(deadline)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RefreshBusy("refresh already running in another process") from exc
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def get(path, *, deadline=None, timeout=5.0, **params):
+    remaining = check_deadline(deadline, reserve=PAUSE + 0.05)
     time.sleep(PAUSE)
-    r = requests.get(f"{API}/{path}", params=params, timeout=10)
+    remaining = check_deadline(deadline, reserve=0.05)
+    r = requests.get(f"{API}/{path}", params=params, timeout=min(timeout, remaining / 2))
     r.raise_for_status()
-    return r.json()
+    check_deadline(deadline)
+    return strict_json(r.text)
 
 
-def team_tx(gid, team):
-    items, page = [], 1
-    while True:
-        j = get("transactions", game_id=gid, team=team, page=page)
-        items += j.get("items", [])
-        if page >= j.get("total_pages", 1):
-            return items
+def _page(path, *, getter=None, deadline=None, timeout=5.0, **params):
+    check_deadline(deadline)
+    result = (getter or get)(path, deadline=deadline, timeout=timeout, **params)
+    check_deadline(deadline)
+    if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+        raise IncompleteGame("malformed public pagination")
+    pages = result.get("total_pages", 1)
+    if type(pages) is not int or not 0 <= pages <= 10000:
+        raise IncompleteGame("invalid page count")
+    return result
+
+
+def completed_games(*, getter=None, deadline=None, timeout=5.0):
+    """Read all completed-game pages; no authenticated/team endpoints."""
+    rows, page, total = [], 1, None
+    while total is None or page <= total:
+        data = _page("games", getter=getter, deadline=deadline, timeout=timeout,
+                     completed_only="true", page_size=1000, page=page)
+        count = max(1, data.get("total_pages", 1))
+        if total is not None and total != count:
+            raise IncompleteGame("game pagination changed; retry later")
+        total = count
+        for game in data["items"]:
+            if not isinstance(game, dict) or type(game.get("id")) is not int:
+                raise IncompleteGame("invalid completed game")
+            if game.get("completed") is False or game.get("status", "completed") != "completed":
+                continue
+            if game["id"] > 0:
+                rows.append(game)
         page += 1
+    ids = [game["id"] for game in rows]
+    if len(ids) != len(set(ids)):
+        raise IncompleteGame("duplicate completed games")
+    return rows
 
 
-def load_game(gid, seed):
-    f = CACHE / f"game_{gid:03d}.json"
-    if f.exists():
-        return json.loads(f.read_text())
-    first = team_tx(gid, seed)
-    teams = sorted({x["issuer"] for x in first} | {x["reviewer"] for x in first})
-    tx = [x for x in first if x["issuer"] == seed]
-    for t in teams:
-        if t != seed:
-            tx += [x for x in team_tx(gid, t) if x["issuer"] == t]
-    data = {"game": gid, "teams": teams, "tx": tx}
-    if not tx:                                  # wrong team name or not published yet: no cache
-        print(f"game {gid}: no transactions for team {seed!r} (name exactly as on the leaderboard?)")
-        return data
-    CACHE.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(data))
+def performance_matrix(*, getter=None, deadline=None, timeout=5.0):
+    """Verified public matrix schema: game_ids columns and per-team cells (not total)."""
+    result, page, total, columns = {}, 1, None, None
+    while total is None or page <= total:
+        data = _page("matrix", getter=getter, deadline=deadline, timeout=timeout, page=page, game_limit=100)
+        ids = data.get("game_ids")
+        count = data.get("total_pages", 1)
+        if (not isinstance(ids, list) or any(type(g) is not int for g in ids) or len(ids) != len(set(ids))
+                or (columns is not None and columns != ids) or (total is not None and total != count)):
+            raise IncompleteGame("matrix pagination changed or malformed")
+        columns, total = ids, max(1, count)
+        for row in data["items"]:
+            team, cells = row.get("team_name"), row.get("cells")
+            if not isinstance(team, str) or not team or team in result or not isinstance(cells, list) or len(cells) != len(ids):
+                raise IncompleteGame("malformed matrix team row")
+            values = {}
+            for gid, cell in zip(ids, cells):
+                if cell is None:
+                    continue
+                if isinstance(cell, bool) or not isinstance(cell, (int, float)) or not math.isfinite(cell):
+                    raise IncompleteGame("non-finite matrix amount")
+                values[gid] = float(cell)
+            result[team] = values
+        page += 1
+    return result
+
+
+def reconcile_game(data, matrix=None):
+    checked = []
+    if matrix is not None:
+        for team in data["teams"]:
+            actual = matrix.get(team, {}).get(data["game"])
+            if actual is None:
+                continue
+            inferred = sum(float(x["amount"]) * (1 if x["issuer"] == team else -1 if x["reviewer"] == team else 0)
+                           for x in data["tx"])
+            if abs(actual - inferred) > 0.020001:
+                raise SettlementMismatch("public per-game net differs from transaction total")
+            checked.append(team)
+    data["reconciliation"] = {"status": "matrix_verified" if len(checked) == len(data["teams"]) else "unavailable",
+                              "checked_teams": checked, "tolerance": 0.02,
+                              "reason": None if len(checked) == len(data["teams"]) else "one or more per-game matrix cells unavailable"}
     return data
+
+
+def team_tx(gid, team, *, getter=None, deadline=None, timeout=5.0, progress=None, checkpoint=None):
+    """Resumable pagination; only complete page responses enter the private checkpoint."""
+    progress = progress if progress is not None else {}
+    pages = progress.setdefault("pages", {})
+    items, page, total = [], 1, None
+    while total is None or page <= total:
+        check_deadline(deadline)
+        data = pages.get(str(page))
+        if data is None:
+            data = _page("transactions", getter=getter, deadline=deadline, timeout=timeout,
+                         game_id=gid, team=team, page=page)
+            if not data["items"]:
+                raise IncompleteGame("transactions not fully published")
+            pages[str(page)] = data
+            if checkpoint:
+                checkpoint()
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+            raise IncompleteGame("invalid transaction checkpoint")
+        count = data.get("total_pages", 1)
+        if type(count) is not int or not 1 <= count <= 10000 or (total is not None and count != total):
+            raise IncompleteGame("transaction pagination changed")
+        total = count
+        if "page" in data and data["page"] != page:
+            raise IncompleteGame("wrong transaction page")
+        items.extend(data["items"])
+        page += 1
+    return items
+
+
+def validate_game(data, gid, *, expected_lines=None):
+    """A completed cache contains every ordered team pair for every expected line."""
+    if (not isinstance(data, dict) or data.get("game") != gid or data.get("completed") is False
+            or data.get("status", "completed") != "completed" or data.get("campaign", "2026-11") != "2026-11"):
+        raise IncompleteGame("invalid cached game")
+    teams, tx = data.get("teams"), data.get("tx")
+    if (not isinstance(teams, list) or len(teams) < 2 or any(not isinstance(t, str) or not t for t in teams)
+            or len(teams) != len(set(teams)) or not isinstance(tx, list) or not tx):
+        raise IncompleteGame("missing complete team/transaction data")
+    try:
+        lines = analyse(tx)
+        expected = set(expected_lines) if expected_lines is not None else set(lines)
+        if not expected or set(lines) != expected:
+            raise ValueError("invoice line coverage differs")
+        keys = {(x["line_item_index"], x["issuer"], x["reviewer"]) for x in tx}
+        matrix = {(line, issuer, reviewer) for line in expected for issuer in teams for reviewer in teams if issuer != reviewer}
+        if keys != matrix or len(keys) != len(tx):
+            raise ValueError("incomplete settlement matrix")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise IncompleteGame(str(exc)) from exc
+    return data
+
+
+def load_game(gid, seed, *, cache_dir=None, getter=None, deadline=None, timeout=5.0, expected_lines=None, matrix=None):
+    """Return a validated full game; incomplete pages checkpoint separately for later retries."""
+    if type(gid) is not int or gid <= 0:
+        raise ValueError("positive game id required")
+    directory = Path(cache_dir) if cache_dir is not None else CACHE
+    path = directory / f"game_{gid:03d}.json"
+    partial_path = directory / "_partial" / f"game_{gid:03d}.json"
+    with cache_lock(directory / f".game_{gid:03d}.lock", deadline=deadline):
+        check_deadline(deadline)
+        if path.exists():
+            try:
+                cached = validate_game(strict_json(path.read_text()), gid, expected_lines=expected_lines)
+                reconcile_game(cached, matrix)
+                cached.update(completed=True, campaign="2026-11")
+                cached.setdefault("provenance", {"endpoint": "legacy public leaderboard cache",
+                                                  "full_matrix_revalidated": True})
+                atomic_json(path, cached, deadline=deadline)
+                return cached
+            except SettlementMismatch:
+                check_deadline(deadline)
+                atomic_json(directory / "_quarantine" / path.name, cached, deadline=deadline)
+                path.unlink(missing_ok=True)
+                raise
+            except (OSError, ValueError, TypeError):
+                check_deadline(deadline)
+                path.unlink(missing_ok=True)
+        try:
+            partial = strict_json(partial_path.read_text())
+            if (partial.get("game") != gid or not isinstance(partial.get("teams"), dict)
+                    or time.time() - partial.get("created_at", 0) > 3600
+                    or any(not isinstance(name, str) or not name or not isinstance(progress, dict)
+                           or not isinstance(progress.get("pages", {}), dict)
+                           for name, progress in partial.get("teams", {}).items())):
+                partial = None
+        except (OSError, ValueError, TypeError, AttributeError):
+            partial = None
+        partial = partial or {"game": gid, "created_at": time.time(), "teams": {}}
+        def checkpoint():
+            atomic_json(partial_path, partial, deadline=deadline)
+        known, fetched, transactions = {seed}, set(), []
+        try:
+            while known - fetched:
+                team = seed if seed not in fetched else sorted(known - fetched)[0]
+                rows = team_tx(gid, team, getter=getter, deadline=deadline, timeout=timeout,
+                               progress=partial["teams"].setdefault(team, {}), checkpoint=checkpoint)
+                for row in rows:
+                    if not isinstance(row, dict) or not isinstance(row.get("issuer"), str) or not isinstance(row.get("reviewer"), str):
+                        raise IncompleteGame("malformed transaction teams")
+                    known.update((row["issuer"], row["reviewer"]))
+                    if row["issuer"] == team:
+                        transactions.append(row)
+                fetched.add(team)
+            data = {"game": gid, "teams": sorted(known), "tx": transactions, "completed": True,
+                    "campaign": "2026-11", "fetched_at": time.time(),
+                    "provenance": {"endpoint": "public leaderboard transactions", "full_pagination": True}}
+            validate_game(data, gid, expected_lines=expected_lines)
+            try:
+                reconcile_game(data, matrix)
+            except SettlementMismatch:
+                atomic_json(directory / "_quarantine" / path.name, data, deadline=deadline)
+                raise
+            atomic_json(path, data, deadline=deadline)
+            partial_path.unlink(missing_ok=True)
+            return data
+        except IncompleteGame:
+            # Published but inconsistent pages may change; do not replay them forever.
+            check_deadline(deadline)
+            partial_path.unlink(missing_ok=True)
+            raise
 
 
 def finite_number(value, name="value"):

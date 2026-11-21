@@ -24,13 +24,16 @@ LATE = 15 * 60          # alarm if a game is not completed this long after its s
 
 
 def update_learning(team, rounds, learning_file):
-    """Runs after settlement publication, never inside the submitting runner."""
+    """Optional cached rebuild; shares the automatic runner learner's process lock."""
     if not rounds.exists():
         print("Learning skipped: rounds.jsonl is absent; use --learn on the runner machine.", flush=True)
         return
-    from claim_to_fame.feedback import build_state, write_state
-    state = build_state(rounds, C.CACHE, team)
-    write_state(state, learning_file, report_path=learning_file.with_name("learning-report.md"))
+    from learn import rebuild_cached
+    result, state = rebuild_cached(team, rounds, C.CACHE, learning_file,
+                                   learning_file.with_name("learning-report.md"))
+    if result["status"] != "updated":
+        print(f"Learning {result['status']}: {result.get('reason', '')}", flush=True)
+        return
     ready = sum(c["status"] == "validated" for c in state["calibrations"])
     print(f"Learning updated: {len(state['games'])} reconciled games; {ready} validated calibrations.", flush=True)
 
@@ -54,7 +57,10 @@ def games():
 
 
 def report(gid, team):
-    data = C.load_game(gid, team)
+    try:
+        data = C.load_game(gid, team)
+    except (C.IncompleteGame, C.RefreshBusy):
+        return None
     tx = data["tx"]
     if not tx:
         return None

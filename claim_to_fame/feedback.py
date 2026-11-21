@@ -20,11 +20,22 @@ from .invoices import norm_unit
 from .pricing import ceil_c, floor_c
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+ALGORITHM = "interval-fit-field-grid-v2"
 CAMPAIGN = "2026-11"
 MIN_GAMES, MIN_TRAIN, MIN_HOLDOUT = 6, 16, 8
 MIN_GAIN = 0.05
 MIN_COVERED_PROB = 0.9
+A_MULT_GRID = (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.05)
+SIGMA_GRID = (0.30, 0.35, 0.50, 0.65, 0.80, 1.00, 1.20, 1.40)
+PARAMETER_KEYS = ("a_mult", "bias", "sigma")
+CONTROLS = {"minimum_games": MIN_GAMES, "minimum_fit_lines": MIN_TRAIN,
+            "minimum_holdout_lines": MIN_HOLDOUT, "minimum_gain": MIN_GAIN,
+            "minimum_covered_probability": MIN_COVERED_PROB, "a_mult_grid": list(A_MULT_GRID),
+            "sigma_grid": list(SIGMA_GRID),
+            "selection": "training conservative net only; frozen chronological holdout",
+            "baseline": "actual observed holdout net; denominator max(abs(net), 1 EUR)",
+            "scope": "uncapped, no stated amount, no uncertainty adjustment"}
 
 
 def policy_fingerprint(policy):
@@ -175,69 +186,197 @@ def _summarize(lines):
     return result
 
 
-def _fit_candidate(rows):
+def _field_counts(lines, tx, team):
+    counts = {"claims": {label: 0 for label in ("fair", "unfair", "unknown")},
+              "decisions": {label: {"accepted": 0, "rejected": 0} for label in ("fair", "unfair", "unknown")}}
+    for line, d in lines.items():
+        for issuer, bounds in d.get("a_bounds", {}).items():
+            fair = d["fair"].get(issuer)
+            if bounds[0] <= 0 and fair is not False:
+                continue  # Zero/default prices are not positive-claim evidence.
+            label = ("fair" if fair is True or bounds[1] <= d["t"][0] else
+                     "unfair" if fair is False or bounds[0] >= d["t"][1] else "unknown")
+            counts["claims"][label] += 1
+            for row in tx:
+                if row["line_item_index"] == line and row["issuer"] == issuer and row["reviewer"] != team:
+                    counts["decisions"][label]["accepted" if row["accepted"] else "rejected"] += 1
+    return counts
+
+
+def _field_summary(reports):
+    counts = {"claims": {label: 0 for label in ("fair", "unfair", "unknown")},
+              "decisions": {label: {"accepted": 0, "rejected": 0} for label in ("fair", "unfair", "unknown")}}
+    for report in reports:
+        for label in counts["claims"]:
+            counts["claims"][label] += report["field_counts"]["claims"][label]
+            for decision in counts["decisions"][label]:
+                counts["decisions"][label][decision] += report["field_counts"]["decisions"][label][decision]
+    for label, event in (("fair", "rejected"), ("unfair", "accepted")):
+        known = sum(counts["decisions"][label].values())
+        counts[f"{label}_{event}_rate"] = counts["decisions"][label][event] / known if known else None
+        counts[f"{label}_decision_count"] = known
+    counts["scope"] = "opponent reviewer decisions on positive claims; unknown fairness remains separate"
+    return counts
+
+
+def _fit_candidate(rows, checkpoint=None):
     """One fixed interval-likelihood fit, trained chronologically, then shrunk."""
     N = statistics.NormalDist()
     iv = [(math.log(r["d"]["t"][0] / r["m"]),
            math.log(r["d"]["t"][1] / r["m"])) for r in rows]
     best = (-math.inf, 0.0, 0.35)
     # Include right-censored observations; never replace an interval by its midpoint.
-    for mu_i in range(-30, 31, 3):
+    for mu_i in range(-90, 31, 3):
+        if checkpoint:
+            checkpoint()
         mu = mu_i / 100
-        for sd_i in range(20, 76, 5):
+        for sd_i in range(20, 141, 5):
             sd = sd_i / 100
             ll = sum(math.log(max(1e-12, (N.cdf((hi - mu) / sd) if math.isfinite(hi) else 1.0)
                                   - N.cdf((lo - mu) / sd))) for lo, hi in iv)
             if ll > best[0]:
                 best = ll, mu, sd
     weight = len(rows) / (len(rows) + 40)
-    baseline = statistics.median(r["sigma"] for r in rows)
+    baseline = statistics.median(r["baseline_sigma"] for r in rows)
     return {"bias": round(min(1.25, max(0.75, math.exp(best[1] * weight))), 4),
-            "sigma": round(min(0.75, max(0.2, baseline + weight * (best[2] - baseline))), 4)}
+            "sigma": round(min(1.40, max(0.2, baseline + weight * (best[2] - baseline))), 4)}
 
 
-def _calibrate(rows, identity, team):
+def _score_rows(rows, params, team, checkpoint=None):
     import calibrate as C
 
+    lower = upper = 0.0
+    for row in rows:
+        if checkpoint:
+            checkpoint()
+        # m is always the original estimator output, never the previously biased price.
+        m = row["m"] * params["bias"]
+        a = floor_c(params["a_mult"] * m)
+        b = ceil_c(C.rule_b(row["p"], m, params["sigma"]))
+        score = C.score_submission(row["d"], team, a, b)
+        lower += score["lower"]
+        upper += score["upper"]
+    return lower, upper
+
+
+def _calibrate(rows, identity, team, checkpoint=None):
     games = sorted({r["game"] for r in rows})
     n_holdout = max(2, len(games) // 3)
     train_games, holdout_games = games[:-n_holdout], games[-n_holdout:]
     train = [r for r in rows if r["game"] in train_games]
     fit = [r for r in train if r["d"]["t"][0] > 0]
     holdout = [r for r in rows if r["game"] in holdout_games]
-    candidate = {**identity, "status": "shadow", "reason": "insufficient chronological evidence",
+    baseline_params = {"a_mult": statistics.median(r["baseline_alpha"] for r in (train or rows)),
+                       "bias": 1.0, "sigma": min(1.40, max(0.2,
+                           statistics.median(r["baseline_sigma"] for r in (train or rows))))}
+    evidence = [{"game": r["game"], "line": r["line"], "m": r["m"], "p": r["p"],
+                 "applied": r["applied_parameters"], "baseline": [r["baseline_alpha"], r["baseline_sigma"]],
+                 "transactions": sorted([(x["issuer"], x["reviewer"], x["accepted"], x["amount"])
+                                           for x in r["d"]["transactions"]])} for r in rows]
+    evidence_hash = hashlib.sha256(json.dumps(evidence, sort_keys=True, allow_nan=False).encode()).hexdigest()
+    candidate = {**identity, "algorithm": ALGORITHM, "evidence_hash": evidence_hash,
+                 "status": "shadow", "activation": "none",
+                 "reason": "insufficient chronological evidence", "reason_code": "insufficient_samples",
                  "sample_count": len(rows), "train_count": len(train), "holdout_count": len(holdout),
                  "fit_count": len(fit), "fit_population": "confirmed-covered training lines; holdout includes all eligible predictions",
+                 "fit_limitation": "positive-bound training selection may bias distribution fit; promotion depends on all eligible holdout lines",
+                 "calibrated_observation_count": sum(r["calibration_applied"] for r in rows),
+                 "fit_intervals": {"two_sided": sum(math.isfinite(r["d"]["t"][1]) for r in fit),
+                                   "right_censored": sum(not math.isfinite(r["d"]["t"][1]) for r in fit)},
                  "train_games": train_games, "holdout_games": holdout_games,
                  "min_covered_prob": MIN_COVERED_PROB, "minimum_gain": MIN_GAIN,
-                 "bias": 1.0, "sigma": min(0.75, max(0.2, statistics.median(r["sigma"] for r in rows)))}
+                 "baseline_parameters": baseline_params, "active_parameters": None,
+                 "training_scores": [], **baseline_params}
     if not fit:
+        candidate["proposed_parameters"] = dict(baseline_params)
         return candidate
-    candidate.update(_fit_candidate(fit))
+    candidate.update(_fit_candidate(fit, checkpoint))
+    # Select the charge multiplier AND reviewer spread using TRAINING settlements only.
+    # Michael's field replay showed why a narrow fitted spread need not be optimal
+    # against opponents. Keep the fitted spread in the grid and freeze before holdout.
+    fitted_sigma = candidate["sigma"]
+    candidate["fitted_sigma"] = fitted_sigma
+    scores = []
+    for alpha in A_MULT_GRID:
+        for sigma in sorted(set(SIGMA_GRID + (fitted_sigma,))):
+            lo, hi = _score_rows(train, {**candidate, "a_mult": alpha, "sigma": sigma}, team, checkpoint)
+            candidate["training_scores"].append({"a_mult": alpha, "sigma": sigma, **_range(lo, hi)})
+            if math.isfinite(lo) and math.isfinite(hi):
+                scores.append((lo, -abs(alpha - baseline_params["a_mult"]),
+                               -abs(sigma - fitted_sigma), -alpha, -sigma, alpha, sigma))
+    if scores:
+        candidate["a_mult"], candidate["sigma"] = max(scores)[-2:]
+    candidate["proposed_parameters"] = {key: candidate[key] for key in PARAMETER_KEYS}
+    if not scores:
+        candidate.update(reason="training payoff bounds are unbounded", reason_code="unbounded_training")
+        return candidate
     if len(games) < MIN_GAMES or len(fit) < MIN_TRAIN or len(holdout) < MIN_HOLDOUT:
         return candidate
     baseline = sum(r["net"] for r in holdout)
-    bounds = []
-    for r in holdout:
-        m = r["m"] * candidate["bias"]
-        a = floor_c(r["alpha"] * m)
-        b = ceil_c(C.rule_b(r["p"], m, candidate["sigma"]))
-        bounds.append(C.score_submission(r["d"], team, a, b))
-    lower = sum(b["lower"] for b in bounds)
-    upper = sum(b["upper"] for b in bounds)
+    lower, upper = _score_rows(holdout, candidate, team, checkpoint)
+    candidate["holdout_by_game"] = [{"game": gid,
+        "baseline_net": round(sum(r["net"] for r in holdout if r["game"] == gid), 2),
+        "candidate": _range(*_score_rows([r for r in holdout if r["game"] == gid], candidate, team, checkpoint))}
+        for gid in holdout_games]
     if not math.isfinite(lower) or not math.isfinite(upper):
         candidate.update(holdout_baseline_net=round(baseline, 2), holdout_candidate=_range(lower, upper),
-                         conservative_gain=None, reason="held-out payoff bounds are unbounded")
+                         conservative_gain=None, reason="held-out payoff bounds are unbounded", reason_code="unbounded_holdout")
         return candidate
     gain = (lower - baseline) / max(abs(baseline), 1.0)
     candidate.update(holdout_baseline_net=round(baseline, 2), holdout_candidate=_range(lower, upper),
-                     conservative_gain=round(gain, 6), reason="held-out lower bound does not improve baseline by 5%")
+                     conservative_gain=round(gain, 6), reason="held-out lower bound does not improve actual baseline by 5%",
+                     reason_code="holdout_gain_below_threshold")
     if math.isfinite(gain) and gain >= MIN_GAIN:
-        candidate.update(status="validated", reason="frozen training fit improves chronological holdout lower bound by at least 5%")
+        candidate.update(status="validated", activation="new", active_parameters=candidate["proposed_parameters"].copy(),
+                         reason="frozen training parameters improve chronological holdout lower bound by at least 5%",
+                         reason_code="validated_holdout")
     return candidate
 
 
-def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None):
+def _training_observation(rec, source, est, final):
+    """Return raw estimator and recorded pricing provenance, or an explicit exclusion."""
+    import calibrate as C
+
+    identity = _identity(rec, source)
+    if source == "rules":
+        return None, "rule_fallback"
+    if any(not isinstance(value, str) or not value for value in identity.values()):
+        return None, "missing_model_prompt_or_config_identity"
+    if not est:
+        return None, "missing_estimate"
+    if any(est.get(k) is not None for k in ("stated", "cap", "shared")):
+        return None, "policy_anchor_or_cap"
+    if est.get("uncertainty_applied"):
+        return None, "uncertainty_policy_not_modelled"
+    try:
+        applied = est.get("calibration_applied", False)
+        if type(applied) is not bool:
+            return None, "invalid_calibration_provenance"
+        if applied and ("m_raw" not in est or any(k not in est for k in ("bias", "sigma", "a_mult"))):
+            return None, "missing_applied_parameters_or_raw_estimate"
+        m = _finite(est.get("m_raw", est["m"]), positive=True)
+        p = _finite(est["p"])
+        if not MIN_COVERED_PROB <= p <= 1:
+            return None, "coverage_probability_outside_scope"
+        baseline_alpha = _finite(rec["a_mult"], positive=True)
+        baseline_sigma = _finite(rec["sigma"], positive=True)
+        alpha = _finite(est.get("a_mult", baseline_alpha), positive=True)
+        sigma = _finite(est.get("sigma", baseline_sigma), positive=True)
+        bias = _finite(est.get("bias", 1.0), positive=True)
+        if not applied and (bias != 1 or alpha != baseline_alpha or sigma != baseline_sigma):
+            return None, "unmarked_parameter_adjustment"
+        expected = [floor_c(alpha * m * bias), ceil_c(C.rule_b(p, m * bias, sigma))]
+        if any(abs(x - y) > 0.011 for x, y in zip(expected, final)):
+            return None, "logged_parameters_do_not_reproduce_submission"
+        return {"m": m, "p": p, "baseline_alpha": baseline_alpha, "baseline_sigma": baseline_sigma,
+                "applied_parameters": {"a_mult": alpha, "bias": bias, "sigma": sigma},
+                "calibration_applied": applied, "identity": identity}, None
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None, "invalid_price_or_estimate_provenance"
+
+
+def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, previous_state=None, checkpoint=None,
+                case_dir=None):
     """Join local records to cached complete games. Bad games are quarantined, not fitted."""
     import calibrate as C
 
@@ -262,10 +401,17 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None):
                 records[gid] = rec
             except (TypeError, ValueError, KeyError):
                 excluded.append({"record": number, "reason": "malformed round JSON"})
-    reports, memory, cohorts = [], [], {}
+    reports, memory, cohorts, training_exclusions = [], [], {}, []
     for gid, rec in sorted(records.items()):
+        if checkpoint:
+            checkpoint()  # Outside quarantine: a scheduling deadline aborts the whole rebuild.
         cache = cache_dir / f"game_{gid:03d}.json"
         try:
+            if not rec.get("final_ab"):
+                from .legacy import recover_record
+                rec, recovery_reason = recover_record(rec, case_dir=case_dir or rounds_path.parent / "cases")
+                if not rec.get("final_ab"):
+                    raise ValueError(f"legacy provenance unavailable: {recovery_reason}")
             data = _strict_json(cache.read_text())
             lines, final = _reconcile(rec, data, team)
             game_rows = []
@@ -286,46 +432,138 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None):
                         "coverage": "historically covered; reassess damage relation and coverage for this case",
                         "policy_limited": bool(est.get("cap") or est.get("shared") or est.get("stated")),
                         "source": {"cache": cache.name, "tier": source, **_identity(rec, source)}})
-                identity = _identity(rec, source)
-                if (source == "rules" or not all(identity.values()) or not est
-                        or any(est.get(k) for k in ("stated", "cap", "shared", "calibration_applied", "uncertainty_applied"))):
+                observation, reason = _training_observation(rec, source, est, final[line])
+                row["learning"] = {"eligible": observation is not None, "reason": reason,
+                                   "identity": _identity(rec, source)}
+                if reason:
+                    training_exclusions.append({"game": gid, "line": line, "tier": source, "reason": reason})
                     continue
-                m, p = _finite(est["m"], positive=True), _finite(est["p"])
-                if not MIN_COVERED_PROB <= p <= 1:
-                    continue
-                alpha = _finite(rec.get("a_mult", 0.85), positive=True)
-                sigma = _finite(rec.get("sigma", 0.35), positive=True)
-                # Calibration applies to the actual unchanged pricing rule, not estimates
-                # from another tier or a run whose winner label hides partial fallback.
-                expected = [floor_c(alpha * m), ceil_c(C.rule_b(p, m, sigma))]
-                if any(abs(x - y) > 0.05 for x, y in zip(expected, final[line])):
-                    continue
-                key = tuple(identity.values())
-                cohorts.setdefault(key, []).append({"game": gid, "d": d, "m": m, "p": p,
-                    "alpha": alpha, "sigma": sigma, "net": row["net"], "identity": identity})
-            reports.append({"game": gid, "summary": _summarize(game_rows), "lines": game_rows})
+                row["learning"]["applied_parameters"] = observation["applied_parameters"]
+                key = tuple(observation["identity"].values())
+                actual_net = (math.fsum(float(x["amount"]) for x in tx if x["issuer"] == team)
+                              - math.fsum(float(x["amount"]) for x in tx if x["reviewer"] == team))
+                cohorts.setdefault(key, []).append({"game": gid, "line": line, "d": d,
+                                                    "net": actual_net, **observation})
+            reports.append({"game": gid, "summary": _summarize(game_rows), "lines": game_rows,
+                            "field_counts": _field_counts(lines, data["tx"], team),
+                            "legacy_recovered": bool(rec.get("legacy_recovered")),
+                            "recovery_reason": rec.get("legacy_recovery_reason")})
         except (OSError, TypeError, ValueError, KeyError, OverflowError, AttributeError, IndexError) as exc:
             # A partially processed game must not leak into recall or calibration.
             memory = [m for m in memory if m["game"] != gid]
             cohorts = {k: [r for r in rows if r["game"] != gid] for k, rows in cohorts.items()}
+            training_exclusions = [r for r in training_exclusions if r["game"] != gid]
             excluded.append({"game": gid, "reason": str(exc)[:160]})
     all_rows = [r for game in reports for r in game["lines"]]
     created = now or dt.datetime.now(dt.timezone.utc)
     if created.tzinfo is None:
         created = created.replace(tzinfo=dt.timezone.utc)
-    return {"schema_version": SCHEMA_VERSION, "campaign": CAMPAIGN, "team": team,
+    games = [g["game"] for g in reports]
+    prior = None
+    try:
+        if (previous_state and previous_state.get("team") == team
+                and set(previous_state["games"]).issubset(games)
+                and _valid_state(previous_state, max(games, default=0) + 1, created, math.inf)):
+            prior = previous_state
+    except (TypeError, ValueError, KeyError, AttributeError):
+        pass
+    calibrations = []
+    for rows in cohorts.values():
+        if not rows:
+            continue
+        if checkpoint:
+            checkpoint()
+        candidate = _calibrate(rows, rows[0]["identity"], team, checkpoint)
+        candidate["validated_at"] = created.isoformat() if candidate["status"] == "validated" else None
+        calibrations.append(_retain_candidate(candidate, rows, prior, team, created, checkpoint))
+    return {"schema_version": SCHEMA_VERSION, "algorithm": ALGORITHM,
+            "controls": {**CONTROLS, "a_mult_grid": list(A_MULT_GRID)},
+            "campaign": CAMPAIGN, "team": team,
             "created_at": created.isoformat(), "max_game": max((g["game"] for g in reports), default=0),
-            "games": [g["game"] for g in reports], "excluded": excluded,
+            "games": games, "excluded": excluded, "training_exclusions": training_exclusions,
+            "learning_counts": {"eligible": sum(len(rows) for rows in cohorts.values()),
+                "ineligible": len(training_exclusions),
+                "calibrated_observations": sum(r["calibration_applied"] for rows in cohorts.values() for r in rows),
+                "recovered_legacy_games": sum(g["legacy_recovered"] for g in reports)},
+            "field_behavior": _field_summary(reports),
             "method": "completed settlement bounds; no exact hidden t; no August data",
             "summary": _summarize(all_rows), "reports": reports,
             "by_tier": {tier: _summarize([r for r in all_rows if r["tier"] == tier])
                         for tier in sorted({r["tier"] for r in all_rows})},
-            "memory": memory[-500:], "calibrations": [_calibrate(rows, rows[0]["identity"], team)
-                                                      for rows in cohorts.values() if rows]}
+            "memory": memory[-500:], "calibrations": calibrations}
+
+
+def _retain_candidate(proposed, rows, prior, team, now, checkpoint=None):
+    """Do not erase an established policy merely because it cannot beat itself again."""
+    if not prior:
+        return proposed
+    for old in prior.get("calibrations", []):
+        if any(old.get(k) != proposed[k] for k in ("tier", "model", "prompt_hash", "config_hash")):
+            continue
+        if old.get("expired_evidence_hash") == proposed["evidence_hash"]:
+            proposed.update(status="shadow", activation="none", active_parameters=None, validated_at=None,
+                            expired_evidence_hash=proposed["evidence_hash"],
+                            reason="validation expired; unchanged settlements cannot refresh its date",
+                            reason_code="validation_expired_no_new_evidence")
+            return proposed
+        if not _validated(old):
+            continue
+        validated_at = dt.datetime.fromisoformat(old["validated_at"])
+        fresh = 0 <= (now - validated_at).total_seconds() <= 36 * 3600
+        same_params = all(old[k] == proposed[k] for k in PARAMETER_KEYS)
+        if same_params and old["evidence_hash"] == proposed["evidence_hash"]:
+            if not fresh:
+                proposed.update(status="shadow", activation="none", active_parameters=None, validated_at=None,
+                                expired_evidence_hash=proposed["evidence_hash"],
+                                reason="validation expired; unchanged settlements cannot refresh its date",
+                                reason_code="validation_expired_no_new_evidence")
+                return proposed
+            unchanged = dict(old)
+            unchanged.update(activation="retained", reason="same parameters and evidence; original validation date retained",
+                             reason_code="unchanged_validated_evidence")
+            return unchanged
+        if not fresh:
+            return proposed  # New evidence may qualify; an expired incumbent never stays active by inheritance.
+        held = [r for r in rows if r["game"] in proposed["holdout_games"]]
+        incumbent = _range(*_score_rows(held, old, team, checkpoint))
+        if proposed["status"] == "validated":
+            if same_params:
+                return proposed  # Same policy has a fresh, distinct validation dataset.
+            lower, upper = proposed["holdout_candidate"]["lower"], incumbent["upper"]
+            gain = (lower - upper) / max(abs(upper), 1) if upper is not None else None
+            proposed.update(holdout_incumbent=incumbent, incumbent_gain=gain)
+            if gain is not None and math.isfinite(gain) and gain >= MIN_GAIN:
+                proposed.update(reason="frozen proposal improves both actual baseline and incumbent holdout upper bound by at least 5%",
+                                reason_code="validated_over_incumbent")
+                return proposed
+            proposed.update(status="shadow", activation="none", active_parameters=None, validated_at=None,
+                            reason="proposal beats historical baseline but does not prove 5% improvement over the incumbent",
+                            reason_code="no_gain_over_incumbent")
+        # When new evidence can prove the incumbent worse than the configured
+        # uncalibrated defaults, stop retaining it. Unknown gaps are not proof.
+        default_bounds = [_score_rows([r], {"a_mult": r["baseline_alpha"], "bias": 1.0,
+                                           "sigma": r["baseline_sigma"]}, team, checkpoint) for r in held]
+        default_lower = sum(b[0] for b in default_bounds)
+        if (incumbent["upper"] is not None and math.isfinite(default_lower)
+                and incumbent["upper"] < default_lower - MIN_GAIN * max(abs(default_lower), 1)):
+            proposed.update(reason="new holdout proves incumbent worse than default; latest proposal remains unvalidated",
+                            reason_code="incumbent_degraded")
+            return proposed
+        kept = {k: v for k, v in old.items() if k not in ("latest_proposal", "monitoring")}
+        kept.update(activation="retained", reason="retained prior validated parameters; latest proposal has no new 5% proof",
+                    reason_code="retained_validated_incumbent", latest_proposal=proposed,
+                    proposed_parameters=proposed["proposed_parameters"],
+                    monitoring={"games": proposed["holdout_games"], "incumbent": incumbent,
+                                "default": _range(default_lower, sum(b[1] for b in default_bounds)),
+                                "eligible_observations": len(rows),
+                                "calibrated_observations": sum(r["calibration_applied"] for r in rows)})
+        return kept
+    return proposed
 
 
 def _valid_state(state, before_game, now, max_age_hours):
-    if state.get("schema_version") != SCHEMA_VERSION or state.get("campaign") != CAMPAIGN:
+    if (state.get("schema_version") != SCHEMA_VERSION or state.get("campaign") != CAMPAIGN
+            or state.get("algorithm") != ALGORITHM or state.get("controls") != CONTROLS):
         return False
     created = dt.datetime.fromisoformat(state["created_at"])
     if created.tzinfo is None or not -60 <= (now - created).total_seconds() <= max_age_hours * 3600:
@@ -350,21 +588,42 @@ def _valid_state(state, before_game, now, max_age_hours):
             return False
         if not isinstance(entry.get("policy_hash"), str) or not entry["policy_hash"]:
             return False
+    identities = set()
     for candidate in state["calibrations"]:
         train, held = candidate["train_games"], candidate["holdout_games"]
         if (any(g not in games for g in train + held) or train != sorted(set(train))
                 or held != sorted(set(held)) or (train and held and max(train) >= min(held))):
             return False
         if (candidate.get("status") not in ("validated", "shadow")
+                or candidate.get("algorithm") != ALGORITHM
                 or any(not isinstance(candidate.get(k), str) or not candidate[k]
                        for k in ("tier", "model", "prompt_hash", "config_hash"))
-                or candidate.get("min_covered_prob") != MIN_COVERED_PROB):
+                or candidate.get("min_covered_prob") != MIN_COVERED_PROB
+                or candidate.get("minimum_gain") != MIN_GAIN):
+            return False
+        identity = tuple(candidate[k] for k in ("tier", "model", "prompt_hash", "config_hash"))
+        if identity in identities:
+            return False
+        identities.add(identity)
+        for key in ("sample_count", "fit_count", "train_count", "holdout_count", "calibrated_observation_count"):
+            if type(candidate.get(key)) is not int or candidate[key] < 0:
+                return False
+        if (candidate["sample_count"] != candidate["train_count"] + candidate["holdout_count"]
+                or candidate["fit_count"] > candidate["train_count"]):
+            return False
+        if not 0 < _finite(candidate["a_mult"], positive=True) <= 3:
             return False
         if not 0.75 <= _finite(candidate["bias"], positive=True) <= 1.25:
             return False
-        if not 0.2 <= _finite(candidate["sigma"], positive=True) <= 0.75:
+        if not 0.2 <= _finite(candidate["sigma"], positive=True) <= 1.40:
             return False
         if candidate.get("status") == "validated" and not _validated(candidate):
+            return False
+        if candidate.get("status") == "validated":
+            validated_at = dt.datetime.fromisoformat(candidate["validated_at"])
+            if (validated_at.tzinfo is None or not -60 <= (now - validated_at).total_seconds() <= max_age_hours * 3600):
+                return False
+        elif candidate.get("active_parameters") is not None:
             return False
     return True
 
@@ -394,7 +653,12 @@ def _validated(candidate):
     try:
         train, held = candidate["train_games"], candidate["holdout_games"]
         baseline, lower = candidate["holdout_baseline_net"], candidate["holdout_candidate"]["lower"]
-        return (candidate.get("status") == "validated" and len(set(train + held)) >= MIN_GAMES
+        return (candidate.get("status") == "validated" and candidate.get("algorithm") == ALGORITHM
+                and candidate.get("a_mult") in A_MULT_GRID
+                and 0.75 <= candidate["bias"] <= 1.25 and 0.2 <= candidate["sigma"] <= 1.40
+                and candidate.get("active_parameters") == {k: candidate[k] for k in PARAMETER_KEYS}
+                and candidate.get("minimum_gain") == MIN_GAIN
+                and len(set(train + held)) >= MIN_GAMES
                 and train and held and max(train) < min(held)
                 and candidate["train_count"] >= MIN_TRAIN and candidate["holdout_count"] >= MIN_HOLDOUT
                 and candidate["fit_count"] >= MIN_TRAIN
@@ -408,15 +672,51 @@ def _validated(candidate):
 
 def calibration_for(state, tier, *, model=None, prompt_hash=None, config_hash=None):
     """Only an exact model/prompt/config match may activate validated calibration."""
-    if not state or not all((model, prompt_hash, config_hash)):
+    if (not state or state.get("schema_version") != SCHEMA_VERSION
+            or state.get("algorithm") != ALGORITHM or not all((model, prompt_hash, config_hash))):
         return None
     for candidate in state.get("calibrations", []):
         if (_validated(candidate) and candidate.get("tier") == tier
                 and candidate.get("model") == model and candidate.get("prompt_hash") == prompt_hash
                 and candidate.get("config_hash") == config_hash):
-            return {key: candidate[key] for key in ("bias", "sigma", "min_covered_prob", "train_count",
-                                                   "holdout_count", "conservative_gain")}
+            return {key: candidate[key] for key in ("a_mult", "bias", "sigma", "min_covered_prob", "train_count",
+                                                   "holdout_count", "fit_count", "conservative_gain",
+                                                   "activation", "validated_at")}
     return None
+
+
+def calibration_status(state, tier, *, model=None, prompt_hash=None, config_hash=None):
+    """Explain inactivity, including identity mismatches, without loosening selection."""
+    wanted = {"tier": tier, "model": model, "prompt_hash": prompt_hash, "config_hash": config_hash}
+    if not state:
+        return {"status": "unavailable", "reason_code": "no_valid_state", "reason": "learning state missing, stale, or invalid"}
+    if state.get("schema_version") != SCHEMA_VERSION or state.get("algorithm") != ALGORITHM:
+        return {"status": "unavailable", "reason_code": "schema_mismatch", "reason": "rebuild learning artifact with current algorithm"}
+    if not all(wanted.values()):
+        return {"status": "unavailable", "reason_code": "missing_runtime_identity", "reason": "model, prompt and tier configuration are required"}
+    candidates = [c for c in state.get("calibrations", []) if c.get("tier") == tier]
+    for candidate in candidates:
+        if all(candidate.get(key) == value for key, value in wanted.items()):
+            active = calibration_for(state, tier, model=model, prompt_hash=prompt_hash, config_hash=config_hash)
+            current = candidate.get("latest_proposal", candidate)
+            return {"status": "active" if active else "shadow", "reason_code": candidate["reason_code"],
+                    "reason": candidate["reason"], "parameters": active,
+                    "proposed_parameters": candidate["proposed_parameters"],
+                    "counts": {k: current[k] for k in ("sample_count", "train_count", "fit_count", "holdout_count",
+                                                        "calibrated_observation_count")}}
+    if candidates:
+        mismatches = [{"model": c.get("model"), "prompt_hash": c.get("prompt_hash"), "config_hash": c.get("config_hash"),
+                       "mismatched_fields": [key for key in ("model", "prompt_hash", "config_hash") if c.get(key) != wanted[key]]}
+                      for c in candidates]
+        return {"status": "unavailable", "reason_code": "identity_mismatch",
+                "reason": "historical model, prompt, or tier configuration differs", "available": mismatches[:6]}
+    reasons = {}
+    for row in state.get("training_exclusions", []):
+        if row.get("tier") == tier:
+            reasons[row["reason"]] = reasons.get(row["reason"], 0) + 1
+    return {"status": "unavailable", "reason_code": "no_eligible_observations",
+            "reason": "no reconciled training observations for this tier", "exclusion_counts": reasons,
+            "excluded_games": len(state.get("excluded", []))}
 
 
 def _tokens(text):
@@ -518,8 +818,33 @@ def render_report(state):
     lines += ["", "Calibration remains shadow until enough chronological evidence demonstrates at least 5% conservative net improvement."]
     for candidate in state["calibrations"]:
         lines.append(f"- {candidate['tier']} / {candidate['model']}: {candidate['status']}; "
-                     f"bias {candidate['bias']:.4f}, sigma {candidate['sigma']:.4f}; "
-                     f"train {candidate['train_count']}, holdout {candidate['holdout_count']}; {candidate['reason']}.")
+                     f"A_MULT {candidate['a_mult']:.4f}, bias {candidate['bias']:.4f}, sigma {candidate['sigma']:.4f}; "
+                     f"train {candidate['train_count']}, covered fit {candidate['fit_count']}, holdout {candidate['holdout_count']}; "
+                     f"{candidate['reason']}.")
+        if candidate.get("latest_proposal"):
+            latest = candidate["latest_proposal"]
+            lines.append(f"  Latest proposal {latest['proposed_parameters']}: {latest['reason']}; "
+                         f"{latest['sample_count']} eligible observations, {latest['calibrated_observation_count']} previously calibrated.")
+        for game in candidate.get("holdout_by_game", []):
+            if game["candidate"]["lower"] is not None:
+                lines.append(f"  Holdout game {game['game']}: actual baseline {game['baseline_net']:.2f}; "
+                             f"candidate {span(game['candidate'])}.")
+    behavior = state.get("field_behavior", {})
+    if behavior:
+        lines += ["", "Opponent behavior (known labels only; unknown fairness retained):",
+                  f"- Positive claims by fairness: {behavior['claims']}."]
+        for label, event in (("fair", "rejected"), ("unfair", "accepted")):
+            value = behavior[f"{label}_{event}_rate"]
+            rate = f"{value:.1%}" if value is not None else "unknown"
+            lines.append(f"- {label} claims {event}: {rate}, {behavior[f'{label}_decision_count']} known-label decisions.")
+    exclusions = {}
+    for row in state.get("training_exclusions", []):
+        exclusions[row["reason"]] = exclusions.get(row["reason"], 0) + 1
+    for reason, count in sorted(exclusions.items()):
+        lines.append(f"- Training excluded {count} lines: {reason}.")
+    for game in state["reports"]:
+        if game.get("legacy_recovered"):
+            lines.append(f"- Game {game['game']} legacy prices recovered and settlement-reconciled: {game['recovery_reason']}.")
     for excluded in state["excluded"]:
         lines.append(f"- Excluded {excluded.get('game', 'record ' + str(excluded.get('record')))}: {excluded['reason']}")
     return "\n".join(lines) + "\n"
