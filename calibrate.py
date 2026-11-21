@@ -54,6 +54,9 @@ def load_game(gid, seed):
         if t != seed:
             tx += [x for x in team_tx(gid, t) if x["issuer"] == t]
     data = {"game": gid, "teams": teams, "tx": tx}
+    if not tx:                                  # wrong team name or not published yet: no cache
+        print(f"game {gid}: no transactions for team {seed!r} (name exactly as on the leaderboard?)")
+        return data
     CACHE.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps(data))
     return data
