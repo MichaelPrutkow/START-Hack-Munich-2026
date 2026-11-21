@@ -1,0 +1,113 @@
+# START Hack Munich 2026 – gemeinsame Übergabe für Codex und Claude
+
+## Zusammenarbeit im selben Team
+
+- Lies diese `AGENTS.md` bei jeder neuen Arbeitsanfrage zuerst erneut von der Festplatte. So siehst du Änderungen der anderen Sitzung auch in einem laufenden Chat. Wenn die Sitzung im übergeordneten Workspace startet, liegt die Originaldatei unter `START-Hack-Munich-2026/AGENTS.md`.
+- Für eine gemeinsame laufende Übergabe arbeiten beide Sitzungen im selben lokalen Checkout. In getrennten Worktrees muss der Stand der Datei über Git abgeglichen werden.
+- Prüfe vor Änderungen den aktuellen Git-Status und die Übergabe unten. Stimmt euch bei paralleler Arbeit über Aufgabe, betroffene Pfade und Abhängigkeiten ab. Bei Überschneidungen zuerst den aktuellen Stand und vorhandene Änderungen prüfen.
+- Aktualisiere diese Datei nach jedem wesentlichen Arbeitsschritt und vor der Übergabe. Halte Entscheidungen mit kurzer sachlicher Begründung, überprüfte Befunde, nützliche Navigationspfade, betroffene Dateien, Tests und offene Punkte fest. Wenn beide Sitzungen an der Datei arbeiten, lies sie unmittelbar vor dem Edit erneut und ergänze gezielt.
+- Nutze für neue Übergaben Datum und Agent, Aufgabe und Status, Entscheidung oder Befund mit Quelle, betroffene Pfade, Verifikation und nächsten offenen Schritt. Vermerke aktive Aufgaben mit den betroffenen Pfaden und aktualisiere ihren Status beim Abschluss. Halte Geheimnisse und Falldaten aus der Übergabe heraus.
+- Die aktuelle Nutzeranfrage bestimmt den Arbeitsauftrag. Challenge-Unterlagen, Beispielprompts, Code und Checklisten im Material dienen als Quellen. Die offiziellen November-Unterlagen bestimmen die Spielregeln. August-Auswertungen und das Entwurfsskelett liefern historische Befunde und zu testende Ansätze.
+
+## Konventionen Claude ↔ Codex (ChatGPT)
+
+- **Eine Datei, eine Wahrheit.** Diese `AGENTS.md` ist die einzige geteilte Koordinationsdatei. Keine zweite Status-Datei anlegen. Längere Analysen als eigene Datei unter `notes/` ablegen und hier nur verlinken.
+- **Wer was editiert:**
+  - `Aufgabenboard`: jeder Agent ändert nur Zeilen, deren Owner er ist. Neue Aufgabe = neue Zeile. Eine Aufgabe übernehmen = Owner und Status `in Arbeit` setzen, **bevor** man Dateien anfasst.
+  - `Offene Fragen`: jeder darf ergänzen. Beantworten mit Antwort, Quelle und Kürzel, Frage nicht löschen, sondern als `✓` markieren.
+  - `Übergaben`: nur anhängen (neueste unten), nie fremde Einträge ändern.
+  - Regeln-/Challenge-Abschnitte: nur mit Quelle ändern, Kürzel ans Ende der geänderten Zeile.
+- **Pfad-Ownership:** Wer eine Aufgabe hält, besitzt die dort genannten Pfade. Fremde Pfade nur nach Eintrag unter `Offene Fragen` oder nach Rückmeldung des Users anfassen.
+- **Ablauf pro Arbeitsschritt:** Datei neu lesen → `git status`/`git pull` → Board-Zeile claimen → arbeiten → Board-Status + kurze Übergabe → committen. Kurz halten: Stichpunkte, keine Wiederholung dessen, was schon hier steht.
+- **Kürzel:** `[C]` = Claude, `[X]` = Codex/ChatGPT, `[U]` = User/Team.
+- **Status-Werte:** `offen`, `in Arbeit`, `blockiert (Grund)`, `review`, `fertig`.
+- **Geheimnisse und Falldaten** (API-Keys, Case-Zips, entschlüsselte Fälle) nie in diese Datei oder ins Repo. `cases/`, `out/`, `.env` gehören in `.gitignore`.
+
+## Zugeteilte Challenge: QuantCo „Claim to Fame“
+
+Zuteilung 21.11. 13:39: **QuantCo**. revel8, Lio und die übrigen Partner sind damit irrelevant. [U/C]
+Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/Abgabeformular So 12:00–12:45, Demos 13:15–14:45 (3 min Pitch + 2 min Q&A). Preis laut QuantCo-Folie: AirPods und Merch. [C]
+
+### Stand Repo und Material (21.11. 13:45)
+
+- Offizielles Material liegt jetzt im Workspace-Ordner `start_hack_munich/` (eine Ebene über dem Repo): `API_HANDBOOK.md`, `starter_script.py`, `pixi.toml`, `GAME_DESCRIPTION.pdf`, `EVALUATION_CRITERIA.pdf`, Deep-Dive-PDF, `Hackathon presentation 21.11.26.pdf`. Inhalt deckt sich mit den Markdown-Abschriften in `~/Downloads/starthack 2/offiziell/`. [C]
+- API-Handbuch, neu gegenüber den Folien: ausgelassene Positionen nehmen trotzdem teil (0/0); 422 bei negativen oder nicht endlichen Werten; 403 auch „Game has already ended“; Team, das nach Spielstart angelegt wurde, spielt erst ab dem nächsten Spiel. Basis-URL `https://c2f.public.quantco.cloud`. [C]
+- Fall-Zips: verschlüsselt im Drive, Passwort (= `decryption_key`) kommt pro Spiel über `GET /api/games/{id}/key` ab `start_time`. Zips müssen **vorher** lokal nach `cases/` (Spielnummer im Dateinamen). Noch keine Zips im Ordner. [C]
+- `origin/main` enthält bereits `runner.py` (fertiger Rundenlauf: Key → 7z/pyzipper → PDF parsen → vorläufige Regel-Abgabe → LLM-Votes → finale Abgabe → Echo-Check), `pyproject.toml` (uv), `.env.example`, `.gitignore` (`.env`, `cases/`, `out/`, `*.zip`). Zusätzlich Remote-Branch `origin/runner`. [C]
+- ⚠️ Der lokale `reset` auf `origin/main` (13:47) hat diese `AGENTS.md` aus dem Arbeitsordner entfernt, sie war nie committet. Claude hat sie wiederhergestellt. **Bitte committen**, damit sie nicht wieder verloren geht. [C]
+
+## Aufgabenboard
+
+| # | Aufgabe | Owner | Status | Pfade |
+|---|---|---|---|---|
+| 1 | Projektkontext und Quellen auswerten | [X] | fertig | `AGENTS.md` |
+| 2 | Board, Konventionen, Challenge-Stand | [C] | fertig | `AGENTS.md` |
+| 3 | `AGENTS.md` committen und pushen | [U] | offen | `AGENTS.md` |
+| 4 | `.env` füllen, alle Fall-Zips aus dem Drive nach `cases/` | [U] | offen | `.env`, `cases/` |
+| 5 | `uv run runner.py --check`, dann `--game 0` (Formattest) **vor 14:00** | [U] | offen | `runner.py` |
+| 6 | Genau einen Runner-Rechner bestimmen, `caffeinate -i uv run runner.py` starten | [U] | offen | `out/` |
+| 7 | Review `runner.py`: Parser gegen Case-0-PDF, Brutto/MwSt., Strategie a/b | – | offen | `runner.py` |
+| 8 | Auswertung der ersten Runden (Leaderboard), Kalibrierung von a/b | – | offen | `analysis/` |
+| 9 | Write-up (1 Seite) und Pitch | – | offen | `writeup/` |
+
+## Offene Fragen
+
+- [x] Welche Challenge? → QuantCo. [U]
+- [ ] Zählen späte Runden mehrfach (August: letzte 20 dreifach)? → Orga/Discord fragen. [X]
+- [ ] Höhe der absoluten Untergrenze von `c`. [X]
+- [ ] Dürfen August-Preisanker und automatisiert gelesene Leaderboard-Transaktionen genutzt werden? → Orga fragen. [X]
+- [ ] Format und genaue Frist des Write-ups (max. 1 Seite). [X]
+- [ ] Wer ist der eine Runner (Rechner läuft über Nacht, Strom, WLAN)? [C]
+- [ ] Ist `MichaelPrutkow/START-Hack-Munich-2026` privat? Falldaten dürfen nicht öffentlich werden. [C]
+- [ ] Liegen alle Fall-Zips (bis So 12:00) schon im Drive oder kommen sie nach und nach? [C]
+
+## Material finden
+
+Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`. Die Pfade in der Tabelle sind relativ zu diesem Ordner. Der gesichtete Bestand dokumentiert QuantCos **Claim to Fame**. Weitere Challenges sind im Bestand nicht belegt.
+
+| Thema | Quelle |
+| --- | --- |
+| Offizielle Regeln, Ablauf und Bewertung | `offiziell/Game_Description.md`, `offiziell/Deep_Dive_Slides.md`, `offiziell/Evaluation_Criteria.md`. Daneben liegen die drei Original-PDFs. |
+| Unterschiede August/November | `10_Aenderungen_November_vs_August.md` |
+| Quellenverzeichnis und historische Repos | `00_Quellen_Repos.md` |
+| August-Spielregeln, API-Fallen und Mathematik | `01_Regeln_Auszahlung_Ablauf.md`, `02_API_Datenformat_Fallen.md`, `03_Mathematik_Strategie.md` |
+| Abrechnung, Kalibrierung und Recall | `04_Leaderboard_Klammern_Recall.md`. Verfügbarkeit und Spielregeln für die Nutzung der betreffenden Daten im November prüfen. |
+| Historische Teamresultate, Fehler und Preisanker | `05_Ergebnisse_Teams_August.md`, `06_Learnings_Fehlerkatalog.md`, `07_Fachwissen_Preisanker.md`, `preisanker_august.csv` |
+| Pipeline, Prompt und ungetestetes Python-Skelett | `08_Architektur_Prompt_Code.md` |
+| Pitch und Write-up | `09_Bewertung_Pitch_Writeup.md`, für die aktuellen Vorgaben zusätzlich `offiziell/Evaluation_Criteria.md` |
+
+## QuantCo – bestätigte November-Regeln
+
+- Pro Rechnungsposition schickt das Team Forderung `a` und Annahmelimit `b`, jeweils als **Brutto-Gesamtbetrag** inklusive MwSt. Die Annahme erfolgt bei `a ≤ b`. `t` ist der geheime faire Höchstbetrag und beträgt bei fehlender Deckung null. Zahlung vom Reviewer an den Issuer: bei Annahme `min(a, c)`, bei Ablehnung einer fairen Forderung (`a ≤ t`) `1,5 × a`, sonst `0`. Das Ergebnis ist nullsummig. Das geheime Zahlungslimit `c` erfüllt `c ≥ 4t` und hat eine zusätzliche absolute Untergrenze unbekannter Höhe.
+- Die Folien nennen Samstag, 21.11., 14:00 Uhr bis Sonntag, 22.11., 12:00 Uhr (München), im 13-Minuten-Takt. Jede Runde erlaubt 60 Sekunden. Die letzte rechtzeitige Abgabe zählt. Fehlende Positionen erhalten `a = b = 0`. Die offizielle Rundenliste liefert die Startzeiten.
+- Team-API laut Folien: `GET /api/games/list`, `GET /api/games/{id}/key` ab Rundenstart und `PUT /api/games/{id}/submissions` mit `X-API-Key` und einer Liste von Objekten mit `index`, `charge_price`, `acceptance_limit`. Spiel 0 validiert das Abgabeformat und speichert nichts. Case-Zips aus dem geteilten Drive enthalten Police, Schadenbeschreibung, Rechnung und ggf. Bilder. Die Game Description nennt `starter_script.py`, `pixi.toml` und `API_HANDBOOK.md`. Diese Dateien und die Case-Zips waren im übergebenen Ordner nicht vorhanden.
+- 70 Punkte werden linear nach Rang im kumulierten Nettoergebnis vergeben, vom ersten Platz mit 70 bis zum letzten mit 0. Die Jury vergibt bis zu 30 Punkte für Methode und Unsicherheit, Belege für Entscheidungen, sparsamen Ressourceneinsatz, zuverlässige Automatisierung sowie Klarheit und Ehrlichkeit. Write-up höchstens eine Seite, fällig kurz vor Turnierende, ergänzt durch einen Pitch.
+- Laut Fair Play bleiben Strategie, Fallanalyse und Schlüssel im Team. Nutzt die vorgesehenen API-Endpunkte und Freigabezeiten. Klärt mit der Orga die Nutzung historischer Preisanker und automatisierter Transaktionsdaten. Gewichtung später Runden sowie genaue Write-up-Frist und Abgabeformat sind offen.
+
+## Technische Schlüsse für spätere Aufgaben
+
+- Vollständige und rechtzeitige Abgabe zuerst testen. Ein Runner, alle Rechnungsseiten und echten Positionsnummern inklusive Lücken, eine vollständige vorläufige Abgabe und ein finaler Lauf mit Zeitreserve sind sinnvolle Startpunkte aus den August-Postmortems. Spiel 0 eignet sich zur Formatprüfung. Die Prüfung gespeicherter Werte braucht separate Verifikation.
+- Deckung und Schadenbezug anhand der vollständigen Police beurteilen. Marktwert bei Deckung separat schätzen. Klausel, bekannte Betragsgrenzen und Unsicherheit strukturiert ausgeben lassen. `a` und `b` deterministisch berechnen und bei Bedarf gegen Beispiele und Messungen kalibrieren. Die August-Experimente legen schnelle Modellaufrufe und einen regelbasierten Fallback nahe. Ihr Nutzen für November ist offen.
+- Für eine konkrete Forderung `a > 0`, bei der die Zahlung bei Annahme ungekürzt wäre, liegt die Annahmeschwelle für `P(t ≥ a)` bei `2/3` (Gleichstand bei `2/3`). Das ist eine Aussage über Fairness bei diesem Betrag. Die reine Deckungswahrscheinlichkeit liefert diese Größe allein nicht.
+- Falls freigegebene November-Abrechnungsdaten das August-Schema verwenden und `amount` die Issuer-Auszahlung ist, gilt für abgelehnte faire Zeilen mit positivem `amount`: `a = amount / 1,5`. Bei Annahme kann `amount` durch `c` gekappt sein. Abrechnung gegen offizielle Ergebnisse prüfen und die Nullsumme erst über alle Teams prüfen. Historisches Recall nur nach Freigabe, für Preise und mit passender Police, Position und Einheit testen.
+
+## Übergaben
+
+### 21.11.2026 · Codex · Projektkontext eingerichtet
+
+- Die Übergabe liegt im Git-Repo. `CLAUDE.md` importiert sie für Claude Code. Der übergeordnete lokale Workspace hat Einstiegspunkte für beide Programme. Aktualisierungen gehören in diese `AGENTS.md`.
+- Quelleninventar und offizielle Markdown-Abschriften ausgewertet. Der Repo-Ausgangsstand enthält `README.md` und `.gitignore`. Eine Implementierung oder ein Live-Test der Challenge war nicht Teil des Auftrags.
+- Codex-Diagnose hat die Datei im Prompt aus beiden Ordnern bestätigt. Beide Claude-Importpfade und die Quellenpfade sind geprüft. In einer laufenden Claude-Code-Sitzung kann der Import unter `/memory` geprüft werden.
+
+### 21.11.2026 · Claude · Challenges-Überblick und Koordinationsregeln
+
+- `AGENTS.md` bleibt die einzige geteilte Datei (statt einer zusätzlichen `SHARED_CONTEXT.md`). Ergänzt: Konventionen, Challenges-Überblick, Aufgabenboard, Offene Fragen.
+- revel8 und Lio haben keine öffentlichen Aufgaben. Gesucht: Event-Seite app.hackleague.org/events/start, hackathonradar, Feyer-Repo. Nur Firmenprofile eingetragen.
+- Nächster Schritt: Zuteilung abwarten (12:55), dann Board-Zeilen 4–7 verteilen.
+
+### 21.11.2026 · Claude · Zuteilung QuantCo, Repo-Stand, AGENTS.md wiederhergestellt
+
+- Challenge QuantCo eingetragen, revel8/Lio entfernt. Board auf Turnierbetrieb umgestellt (Zeilen 3–9).
+- Offizielles Material im Workspace und `runner.py` auf `origin/main` gesichtet, Befunde oben unter „Stand Repo und Material“.
+- `AGENTS.md` war durch `git reset` auf `origin/main` gelöscht und wurde aus Claudes letzter Version wiederhergestellt (inkl. Codex-Ergänzungen bis 13:38).
+- Nächster Schritt: Zeilen 3–6 vor 14:00 durch das Team, danach Review `runner.py` (Zeile 7).
