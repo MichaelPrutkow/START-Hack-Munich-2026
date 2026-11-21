@@ -65,8 +65,9 @@ class VoteUncertaintyTests(unittest.TestCase):
         self.assertEqual(estimate["anchor_validity"]["stated"]["invalid"], 1)
 
     def test_shared_cap_scales_the_already_line_capped_amounts(self):
-        for stated in (None, 1000):
-            adjusted = pricing.apply_shared_caps({1: (1, 1000, stated, 100, 100),
+        # 400/100 is the external review's case (old path sent 100 + 42.50 against a limit of 100)
+        for raw, stated in ((400, None), (400, 400), (1000, None), (1000, 1000)):
+            adjusted = pricing.apply_shared_caps({1: (1, raw, stated, 100, 100),
                                                   2: (1, 100, None, None, 100)})
             for a_mult in (0.85, 2):
                 amounts = [pricing.price(*agg, 50, a_mult=a_mult, sigma=0.35)

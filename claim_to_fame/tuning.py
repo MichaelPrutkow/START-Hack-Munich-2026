@@ -86,7 +86,7 @@ def own_lines(rec):
             if src == "rules" or not e or not ab or not pricing.pos(e.get("m")):
                 continue
             out[int(k)] = {"m": float(e["m"]) * float(e.get("bias") or 1.0), "p": float(e.get("p") or 0),
-                           "stated": e.get("stated"), "cap": e.get("cap"), "a": ab[0]}
+                           "stated": e.get("stated"), "cap": e.get("cap"), "a": ab[0], "ab": list(ab)}
         return out
     winner = rec.get("winner")
     if not winner or winner == "rules":
@@ -97,78 +97,97 @@ def own_lines(rec):
     for k in set(est) | set(tiers):
         e, ab = est.get(k), tiers.get(k)
         a = ab[0] if ab else (e or {}).get("a")
+        sent = list(ab) if ab and winner != "lb" else None   # "lb": reconstructed from the leaderboard, b unknown
         if e and pricing.pos(e.get("m")):
             out[int(k)] = {"m": float(e["m"]), "p": float(e.get("p") or 0), "stated": e.get("stated"),
-                           "cap": e.get("cap"), "a": a}
+                           "cap": e.get("cap"), "a": a, "ab": sent}
         elif ab and ab[0] > 0:
             out[int(k)] = {"m": ab[0] / float(rec.get("a_mult") or 1.0), "p": 1.0 if ab[1] > 0 else 0.5,
-                           "stated": None, "cap": None, "a": ab[0]}
+                           "stated": None, "cap": None, "a": ab[0], "ab": sent}
     return out
 
 
-# ---------------------------------------------------------------- replay one line
-def _p_acc(a, b):
-    lo, hi = b
-    if a <= lo:
-        return 1.0
-    if a >= hi:
-        return 0.0
-    return 0.5 if hi == math.inf else (hi - a) / (hi - lo)
-
-
-def _p_fair(a, t):
-    lo, hi = t
-    if a <= lo:
-        return 1.0
-    if a >= hi:
-        return 0.0
-    if hi == math.inf:                       # nobody overshot: closed brackets ran to 1.35-1.6 x lo
-        return 0.5 if a <= 1.25 * lo else 0.25 if a <= 1.6 * lo else 0.0
-    return (hi - a) / (hi - lo)
-
-
-def line_net(d, team, a, b):
-    """Expected net of charging a and accepting up to b on this line, other teams as played."""
-    net = 0.0
-    if a > 0:
-        pf = _p_fair(a, d["t"])
-        for rev, bb in d["b"].items():
-            if rev == team:
-                continue
-            pa = _p_acc(a, bb)
-            net += pf * (pa * a + (1 - pa) * 1.5 * a) + (1 - pf) * pa * a
-    for iss, ai in d["a"].items():
-        if iss == team or ai <= 0:
-            continue
-        f = d["fair"].get(iss)
-        pf = (1.0 if f else 0.0) if f is not None else _p_fair(ai, d["t"])
-        net -= ai if ai <= b else pf * 1.5 * ai
-    return net
+# ---------------------------------------------------------------- replay with bounds
+def score(d, team, a, b):
+    """(lower, upper) net of charging a and accepting up to b on this line, other teams as played.
+    calibrate.score_submission: unknown reviewer limits, unknown fairness and the payment cap c
+    (c >= 4t, accepted pays min(a, c)) are kept as ranges, never interpolated."""
+    import calibrate as C
+    sc = C.score_submission(d, team, a, b)
+    return sc["lower"], sc["upper"]
 
 
 def build(games, rounds, team):
-    """games {gid: tx}, rounds {gid: rec} -> list of rows {"g", "i", "d", "m", "p", "stated", "cap"}."""
+    """games {gid: tx}, rounds {gid: rec} -> rows {"g", "i", "d", "team", "m", "p", "stated", "cap"}.
+    Brackets come from calibrate.analyse, closed with our own submitted prices where we know them."""
+    import calibrate as C
     rows = []
     for gid in sorted(games):
         mine = own_lines(rounds.get(gid) or {})
         if not mine:
             continue
-        L = analyse(games[gid], {i: x["a"] for i, x in mine.items()}, team)
+        sub = {i: x["ab"] for i, x in mine.items() if x.get("ab")}
+        try:
+            L = C.analyse(games[gid], sub, team) if sub else C.analyse(games[gid])
+        except ValueError:                    # contradicting own record: brackets from the field only
+            L = C.analyse(games[gid])
         for i, x in sorted(mine.items()):
             d = L.get(i)
             if d is None or not any(k != team for k in d["b"]):
                 continue
-            rows.append({"g": gid, "i": i, "d": d, "team": team, **{k: x[k] for k in ("m", "p", "stated", "cap")}})
+            row = {"g": gid, "i": i, "d": d, "team": team, **{k: x[k] for k in ("m", "p", "stated", "cap")}}
+            try:
+                lo, hi = score(d, team, *pricing.price(row["p"], row["m"], row["stated"], row["cap"], row["m"],
+                                                       a_mult=0.85, sigma=0.35, uncertainty_aware=False))
+            except ValueError:
+                continue
+            if math.isfinite(lo) and math.isfinite(hi):
+                rows.append(row)
     return rows
 
 
 def replay(rows, a_mult, sigma):
-    """-> {gid: net} for our pricing rule with these settings."""
+    """-> {gid: (lower, upper)} for our pricing rule with these settings."""
     out = {}
     for r in rows:
         a, b = pricing.price(r["p"], r["m"], r["stated"], r["cap"], r["m"], a_mult=a_mult, sigma=sigma,
                              uncertainty_aware=False)
-        out[r["g"]] = out.get(r["g"], 0.0) + line_net(r["d"], r["team"], a, b)
+        lo, hi = score(r["d"], r["team"], a, b)
+        plo, phi = out.get(r["g"], (0.0, 0.0))
+        out[r["g"]] = (plo + lo, phi + hi)
+    return out
+
+
+def shadow_report(games, rounds, team):
+    """Pre-registered shadow variants from rounds.jsonl (runner.shadow_variants, never sent) against
+    the real submission: {variant: {"games", "lines", "lower", "upper"}}, change in net vs actual.
+    Same bounds as everywhere: unknown limits, fairness and c stay ranges."""
+    import calibrate as C
+    out = {}
+    for gid in sorted(games):
+        rec = rounds.get(gid) or {}
+        final, shadow = rec.get("final_ab"), rec.get("shadow")
+        if rec.get("dry") or not isinstance(final, dict) or not isinstance(shadow, dict):
+            continue
+        try:
+            L = C.analyse(games[gid], {int(i): ab for i, ab in final.items()}, team)
+        except ValueError:
+            continue
+        for name, variant in shadow.items():
+            acc = out.setdefault(name, {"games": [], "lines": 0, "lower": 0.0, "upper": 0.0})
+            acc["games"].append(gid)
+            for i, ab in variant.items():
+                d, real = L.get(int(i)), final.get(str(i)) or final.get(i)
+                if d is None or not real or list(ab) == list(real):
+                    continue
+                try:
+                    vlo, vhi = score(d, team, *ab)
+                    rlo, rhi = score(d, team, *real)
+                except ValueError:
+                    continue
+                acc["lines"] += 1
+                acc["lower"] += vlo - rhi
+                acc["upper"] += vhi - rlo
     return out
 
 
@@ -199,9 +218,11 @@ def fit_log_ratio(rows):
 
 # ---------------------------------------------------------------- choose settings
 def choose(rows, current, *, min_lines=MIN_LINES, min_gain=MIN_GAIN, half_life=HALF_LIFE):
-    """current {"a_mult", "sigma"} -> (new settings, report). Keeps `current` unless the backtest
-    clearly prefers another setting: enough lines, weighted gain >= min_gain, not worse than
-    current in at least 2 of 3 chronological thirds, and at most one STEP per update."""
+    """current {"a_mult", "sigma"} -> (new settings, report). The grid's best midpoint only gives the
+    direction; the step that would actually be written (at most one STEP) must itself pass, against
+    current: enough lines; weighted midpoint gain >= min_gain; weighted lower bound (worst case over
+    unknown limits, fairness and c) not worse; midpoint not worse in at least 2 of 3 chronological thirds; still a gain without the game
+    that gains most (no single threshold hit). Otherwise keep `current`."""
     cur = {"a_mult": clamp("a_mult", current["a_mult"]), "sigma": clamp("sigma", current["sigma"])}
     report = {"lines": len(rows), "games": sorted({r["g"] for r in rows}), "current": cur,
               "fit": fit_log_ratio(rows)}
@@ -213,26 +234,44 @@ def choose(rows, current, *, min_lines=MIN_LINES, min_gain=MIN_GAIN, half_life=H
     w = {g: 0.5 ** ((last - g) / half_life) for g in games}
     thirds = [set(games[k * len(games) // 3:(k + 1) * len(games) // 3]) for k in range(3)]
 
-    def score(am, s):
-        per = replay(rows, am, s)
-        return sum(w[g] * v for g, v in per.items()), [sum(per.get(g, 0.0) for g in T) for T in thirds]
+    def weighted(per, k):
+        return sum(w[g] * (v[k] if k < 2 else (v[0] + v[1]) / 2) for g, v in per.items())
 
-    base, base_t = score(cur["a_mult"], cur["sigma"])
-    grid = {(am, s): score(am, s) for am in A_GRID for s in S_GRID}
-    (am, s), (best, best_t) = max(grid.items(), key=lambda kv: kv[1][0])
-    report["grid"] = {f"{k[0]:.2f}/{k[1]:.2f}": round(v[0]) for k, v in grid.items()}
-    report["current_score"], report["best"] = round(base), {"a_mult": am, "sigma": s, "score": round(best)}
-    wins = sum(1 for x, y in zip(best_t, base_t) if x >= y - 1e-9)
-    if best - base < min_gain:
-        report["decision"] = f"keep: best {am:.2f}/{s:.2f} gains {best - base:+.0f} (< {min_gain:.0f})"
-        return cur, report
-    if wins < 2:
-        report["decision"] = f"keep: best {am:.2f}/{s:.2f} better in only {wins} of 3 periods"
-        return cur, report
+    base = replay(rows, cur["a_mult"], cur["sigma"])
+    grid = {(am, s): replay(rows, am, s) for am in A_GRID for s in S_GRID}
+    (am, s), best = max(grid.items(), key=lambda kv: weighted(kv[1], 2))
+    report["grid"] = {f"{k[0]:.2f}/{k[1]:.2f}": round(weighted(v, 2)) for k, v in grid.items()}
+    report["current_score"] = {"mid": round(weighted(base, 2)), "lower": round(weighted(base, 0)),
+                               "upper": round(weighted(base, 1))}
+    report["best"] = {"a_mult": am, "sigma": s, "score": round(weighted(best, 2))}
     new = {}
     for k, target in (("a_mult", am), ("sigma", s)):
         step = max(-STEP[k], min(STEP[k], target - cur[k]))
         new[k] = round(clamp(k, cur[k] + step), 3)
-    report["decision"] = (f"change: {cur['a_mult']:.2f}/{cur['sigma']:.2f} -> {new['a_mult']:.2f}/{new['sigma']:.2f}"
-                          f" (best {am:.2f}/{s:.2f}, +{best - base:.0f} weighted, {wins}/3 periods)")
+    if new == cur:
+        report["decision"] = f"keep: current {cur['a_mult']:.2f}/{cur['sigma']:.2f} is the best grid point"
+        return cur, report
+    step = replay(rows, new["a_mult"], new["sigma"])
+    gain = {k: weighted(step, k) - weighted(base, k) for k in (0, 1, 2)}
+    per_game = {g: (step[g][0] + step[g][1] - base[g][0] - base[g][1]) / 2 for g in games}
+    top = max(per_game, key=per_game.get)
+    without_top = sum(w[g] * v for g, v in per_game.items() if g != top)
+    wins = sum(1 for T in thirds if sum(per_game[g] for g in T) >= -1e-9)
+    report["step"] = {**new, "gain_mid": round(gain[2]), "gain_lower": round(gain[0]), "gain_upper": round(gain[1]),
+                      "periods": wins, "best_game": top, "gain_without_best_game": round(without_top)}
+    label = f"{cur['a_mult']:.2f}/{cur['sigma']:.2f} -> {new['a_mult']:.2f}/{new['sigma']:.2f}"
+    reasons = []
+    if gain[2] < min_gain:
+        reasons.append(f"midpoint gain {gain[2]:+.0f} < {min_gain:.0f}")
+    if gain[0] < -1e-9:
+        reasons.append(f"worst case {gain[0]:+.0f} < 0")
+    if wins < 2:
+        reasons.append(f"better in only {wins} of 3 periods")
+    if without_top <= 0:
+        reasons.append(f"without G{top} {without_top:+.0f}")
+    if reasons:
+        report["decision"] = f"keep: step {label} fails: " + "; ".join(reasons) + f" (grid best {am:.2f}/{s:.2f})"
+        return cur, report
+    report["decision"] = (f"change: {label} (+{gain[2]:.0f} weighted midpoint, bounds {gain[0]:+.0f}/{gain[1]:+.0f}, "
+                          f"{wins}/3 periods, without G{top} {without_top:+.0f}; grid best {am:.2f}/{s:.2f})")
     return new, report

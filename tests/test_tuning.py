@@ -38,10 +38,13 @@ class AnalyseTests(unittest.TestCase):
         self.assertEqual(d["t"], [100.0, 150.0])
         self.assertEqual(d["b"]["Alpha"], [100.0, 150.0])
 
-    def test_line_net_matches_official_payoffs(self):
-        d = LR.analyse(example_game(), {1: 150.0}, "Beta")[1]
-        self.assertAlmostEqual(LR.line_net(d, "Beta", 150.0, 90.0), -300.0)   # table: Beta -300
-        self.assertAlmostEqual(LR.line_net(d, "Beta", 100.0, 130.0), 100 + 100 - 100 - 100)
+    def test_bounds_match_official_payoffs(self):
+        import calibrate as C
+        d = C.analyse(example_game(), {1: (150.0, 90.0)}, "Beta")[1]
+        self.assertEqual(LR.score(d, "Beta", 150.0, 90.0), (-300.0, -300.0))   # table: Beta -300
+        lo, hi = LR.score(d, "Beta", 100.0, 130.0)                             # fair claim, accepts both
+        self.assertLessEqual(lo, 100 + 100 - 100 - 100)
+        self.assertGreaterEqual(hi, 100 + 100 - 100 - 100)
 
 
 class ChooseTests(unittest.TestCase):
@@ -67,6 +70,16 @@ class ChooseTests(unittest.TestCase):
         self.assertLessEqual(abs(new["a_mult"] - 0.85), LR.STEP["a_mult"] + 1e-9)
         self.assertLessEqual(abs(new["sigma"] - 0.35), LR.STEP["sigma"] + 1e-9)
         self.assertGreater(new["sigma"], 0.35)          # accepting 70 at t = 60 loses: b must drop
+        self.assertGreaterEqual(rep["step"]["gain_lower"], 0)   # the written step itself was checked
+
+    def test_keeps_when_the_gain_comes_from_one_game(self):
+        rows = [r for r in self.rows(9, 10) if r["g"] == 9]          # game 9: ten lines that gain
+        for g in range(1, 9):                                         # other games: lower a only costs
+            d = {"a": {}, "fair": {}, "b": {f"T{k}": [200.0, math.inf] for k in range(5)}, "t": [100.0, math.inf]}
+            rows.append({"g": g, "i": 1, "d": d, "team": "us", "m": 100.0, "p": 0.99, "stated": None, "cap": None})
+        new, rep = LR.choose(rows, {"a_mult": 0.85, "sigma": 0.35}, min_gain=0)
+        self.assertEqual(new, {"a_mult": 0.85, "sigma": 0.35})
+        self.assertIn("without G9", rep["decision"])
 
     def test_keeps_when_gain_is_small(self):
         new, rep = LR.choose(self.rows(), {"a_mult": 0.85, "sigma": 0.35}, min_gain=1e9)
@@ -80,6 +93,25 @@ class ChooseTests(unittest.TestCase):
         self.assertAlmostEqual(own[2]["m"], 40.0 / 0.85)
         self.assertEqual(own[2]["p"], 0.5)
         self.assertEqual(LR.own_lines({"winner": "rules"}), {})
+        self.assertEqual(own[1]["ab"], [85.0, 86.0])                           # sent prices close brackets
+        lb = {**rec, "winner": "lb", "tiers": {"lb": rec["tiers"]["deep"]}, "est": {}}
+        self.assertIsNone(LR.own_lines(lb)[1]["ab"])                           # leaderboard: b unknown
+
+
+class UpdateTests(unittest.TestCase):
+    def test_restart_does_not_step_twice_on_the_same_games(self):
+        tmp = Path(tempfile.mkdtemp())
+        rows = ChooseTests().rows()
+        with patch.object(tune, "collect", return_value={}), patch.object(LR, "build", return_value=rows):
+            first, _ = tune.update("us", fetch=False, current={"a_mult": 0.85, "sigma": 0.35}, rounds={},
+                                   params_path=tmp / "params.json")
+            again, rep = tune.update("us", fetch=False, current=first, rounds={}, params_path=tmp / "params.json")
+        self.assertNotEqual(first, {"a_mult": 0.85, "sigma": 0.35})
+        self.assertEqual(again, first)
+        self.assertIn("no new data", rep["decision"])
+        log = [json.loads(x) for x in (tmp / "tune.jsonl").read_text().splitlines()]
+        self.assertEqual(len(log), 1)
+        self.assertTrue(log[0]["data"] and log[0]["games"] and log[0]["updated"])
 
 
 class SettingsTests(unittest.TestCase):

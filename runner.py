@@ -449,6 +449,39 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 
+GIT_COMMIT = "unknown"          # set once in main(); round records name the code that played
+
+
+def git_commit():
+    """Short HEAD commit, '+dirty' with uncommitted tracked changes. Never raises."""
+    try:
+        run = lambda *a: subprocess.run(["git", "-C", str(ROOT), *a], capture_output=True, text=True,
+                                        timeout=5).stdout.strip()
+        head = run("rev-parse", "--short", "HEAD")
+        return (head or "unknown") + ("+dirty" if run("status", "--porcelain", "--untracked-files=no") else "")
+    except Exception:                                  # pragma: no cover
+        return "unknown"
+
+
+# Pre-registered shadow variants (external review 21.11. 16:49): logged next to the real submission,
+# never sent. "uncertain" = quantity <= 1 (lump sum, single device, mixed load) and no document amount.
+SHADOW_A, SHADOW_B = 0.80, 0.80
+
+
+def shadow_variants(items, final, details):
+    """{variant: {i: (a, b)}} derived from the final submission; rule-based lines stay unchanged."""
+    out = {"a80_all": {}, "a80_uncertain": {}, "b_le_80pct_a": {}}
+    for i, (a, b) in final.items():
+        e = details.get(i)
+        llm = e is not None and e.get("stated") is None
+        q = items.get(i, {}).get("quantity")
+        uncertain = llm and isinstance(q, (int, float)) and q <= 1
+        out["a80_all"][i] = (floor_c(a * SHADOW_A) if llm else a, b)
+        out["a80_uncertain"][i] = (floor_c(a * SHADOW_A) if uncertain else a, b)
+        out["b_le_80pct_a"][i] = (a, min(b, ceil_c(SHADOW_B * a)) if llm else b)
+    return out
+
+
 def strategy_identity():
     """Stable per-estimator identity; changing prices/logging does not erase evidence."""
     def code(fn):
@@ -546,6 +579,7 @@ def play_game(gid, start, dry=False, use_llm=True):
     fb = {i: rule_value(it) for i, it in items.items()}
     rules = {i: (floor_c(v), ceil_c(v)) for i, v in fb.items()}
     prov_ok = submit(gid, rules, deadline, dry, "provisional")
+    confirmed = ["provisional"] if prov_ok else []       # stages whose submission the server confirmed
     t_prov = time.time() - t_key
     log.info("[%s] %d lines, provisional after %.1fs", gid, len(items), t_prov)
     identity = strategy_identity()
@@ -630,6 +664,7 @@ def play_game(gid, start, dry=False, use_llm=True):
             merged = {**best["ab"], **{i: part[i] for i in selected}}
             if not submit(gid, merged, deadline, dry, tier.name):
                 return False
+            confirmed.append(tier.name)
             best["ab"], best["tier"] = merged, tier.name
             for i in selected:
                 best["est"][i], best["sources"][i], best["levels"][i] = details[i], tier.name, tier.level
@@ -688,13 +723,18 @@ def play_game(gid, start, dry=False, use_llm=True):
                "usage": dict(usage), "models": {t.name: t.model for t in TIERS},
                "items": items, "tiers": dict(out), "est": dict(est), "votes": dict(vote_log),
                "final_ab": final, "line_sources": best["sources"].copy(),
-               "a_mult": A_MULT, "sigma": SIGMA, "settings": SETTINGS_SOURCE, **identity,
+               "a_mult": A_MULT, "sigma": SIGMA, "settings": SETTINGS_SOURCE, "commit": GIT_COMMIT,
+               "confirmed": list(confirmed), **identity,
                "policy_hash": hashlib.sha256(policy.encode()).hexdigest(),
                "learning_version": state.get("schema_version") if state else None,
                "learning_max_game": state.get("max_game") if state else None,
                "learning_created_at": state.get("created_at") if state else None}
         if "focus" in est:
             rec["models"]["focus"] = next((t.model for t in TIERS if t.name == "deep"), "")
+        try:
+            rec["shadow"] = shadow_variants(items, final, best["est"])
+        except Exception as e:                      # logging only, never blocks the record
+            log.warning("[%s] shadow variants failed: %s", gid, type(e).__name__)
         jlog("rounds.jsonl", rec)
     log.info("[%s] DONE winner %s, sum a %.0f", gid, best["tier"], sum(a for a, _ in final.values()))
     return rec
@@ -792,7 +832,7 @@ def run_schedule(dry, use_llm, learning=None):
 
 
 def main():
-    global POOL, TIERS, A_MULT, SIGMA, DISAGREE
+    global POOL, TIERS, A_MULT, SIGMA, DISAGREE, GIT_COMMIT
     ap = argparse.ArgumentParser()
     ap.add_argument("--game", type=int, help="play this game now (0 = test game)")
     ap.add_argument("--check", action="store_true")
@@ -804,6 +844,8 @@ def main():
     TIERS = build_tiers()
     POOL = KeyPool()
     setup_logging()
+    GIT_COMMIT = git_commit()
+    log.info("code %s", GIT_COMMIT)
     if args.check:
         return check()
     if not os.environ.get("TEAM_API_KEY"):

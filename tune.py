@@ -17,6 +17,7 @@ not worse in 2 of 3 periods, at most 0.05 A_MULT and 0.30 SIGMA per update.
 """
 import argparse
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -116,17 +117,37 @@ def load_params(path=None):
         return None
 
 
+def data_state(rows):
+    """Fingerprint of what a decision saw: games, lines and our estimates (for tune.jsonl)."""
+    key = sorted((r["g"], r["i"], round(r["m"], 2), round(r["p"], 3)) for r in rows)
+    return hashlib.sha256(json.dumps(key).encode()).hexdigest()[:12]
+
+
+def last_logged(path):
+    """Last entry of tune.jsonl next to params.json, or None."""
+    try:
+        lines = (Path(path).parent / "tune.jsonl").read_text().splitlines()
+        return json.loads(lines[-1]) if lines else None
+    except (OSError, ValueError):
+        return None
+
+
+def log_decision(rec, path):
+    with open(Path(path).parent / "tune.jsonl", "a") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
 def write_params(new, report, path=None):
     path = Path(path or PARAMS)
     path.parent.mkdir(parents=True, exist_ok=True)
     rec = {**new, "updated": dt.datetime.now().isoformat(timespec="seconds"), "decision": report["decision"],
-           "lines": report["lines"], "games": report["games"], "fit": report.get("fit"),
+           "lines": report["lines"], "games": report["games"], "data": report.get("data"),
+           "current": report.get("current"), "step": report.get("step"), "fit": report.get("fit"),
            "best": report.get("best"), "current_score": report.get("current_score")}
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(rec, indent=1))
     os.replace(tmp, path)                     # atomic: the runner never reads half a file
-    with open(path.parent / "tune.jsonl", "a") as f:
-        f.write(json.dumps({**rec, "grid": report.get("grid")}) + "\n")
+    log_decision({**rec, "grid": report.get("grid")}, path)
     return rec
 
 
@@ -140,14 +161,24 @@ def update(team, *, fetch=True, write=True, current=None, deadline=None, rounds=
     if current is None:
         current = current_settings() if params_path is None else \
             {k: v for k, v in (load_params(params_path) or current_settings()).items() if k in ("a_mult", "sigma")}
-    new, report = learning.choose(rows, current)
     target = Path(params_path or PARAMS)
-    if write and (new != current or target.exists()):
+    state = data_state(rows)
+    prev = last_logged(target) if write else None
+    if prev and prev.get("data") == state:
+        # Same games and estimates as the last decision (e.g. the watcher restarted): never step twice.
+        cur = {"a_mult": learning.clamp("a_mult", current["a_mult"]), "sigma": learning.clamp("sigma", current["sigma"])}
+        return cur, {"lines": len(rows), "games": sorted({r["g"] for r in rows}), "data": state, "current": cur,
+                     "decision": f"keep: no new data since {prev.get('updated', '?')}"}
+    new, report = learning.choose(rows, current)
+    report["data"] = state
+    if write:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    if write and (new != report["current"] or target.exists()):
         write_params(new, report, target)       # first file only on a real change: .env stays in charge
     elif write:
-        with open(target.parent / "tune.jsonl", "a") as f:
-            f.write(json.dumps({"updated": dt.datetime.now().isoformat(timespec="seconds"), **new,
-                                "decision": report["decision"], "lines": report["lines"]}) + "\n")
+        log_decision({"updated": dt.datetime.now().isoformat(timespec="seconds"), **new,
+                      "decision": report["decision"], "lines": report["lines"], "games": report["games"],
+                      "data": state, "step": report.get("step"), "current_score": report.get("current_score")}, target)
     return new, report
 
 
@@ -158,7 +189,17 @@ def main():
     ap.add_argument("--write", action="store_true", help="write exploratory out/params.json (never applied by runner)")
     ap.add_argument("--from-leaderboard", type=float, metavar="A_MULT",
                     help="games without rounds.jsonl record: m = our public a / A_MULT")
+    ap.add_argument("--shadow", action="store_true",
+                    help="score the logged shadow variants (a -20 %%, b <= 0.8 a) against what was sent")
     args = ap.parse_args()
+    if args.shadow:
+        res = learning.shadow_report(collect(args.team, args.fetch), read_rounds(OUT / "rounds.jsonl"), args.team)
+        for name, r in sorted(res.items()):
+            print(f"{name:<14} games {r['games']}  changed lines {r['lines']}  "
+                  f"net change vs sent [{r['lower']:+.0f}, {r['upper']:+.0f}]")
+        if not res:
+            print("no rounds with shadow variants yet")
+        return
     new, rep = update(args.team, fetch=args.fetch, write=args.write, lb_a_mult=args.from_leaderboard)
     print(f"lines {rep['lines']} from games {rep['games']}")
     if rep.get("fit"):

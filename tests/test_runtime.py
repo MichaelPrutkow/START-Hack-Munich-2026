@@ -137,6 +137,11 @@ class RuntimeTests(unittest.TestCase):
         self.assertGreater(rec["est"]["deep"][1]["log_spread"], 0)
         self.assertTrue(rec["dry"])
         self.assertEqual(rec["campaign"], "2026-11")
+        # Reconstructable afterwards: code, confirmed stages, shadow variants that were not sent
+        self.assertIn("commit", rec)
+        self.assertEqual(rec["confirmed"], ["provisional", "fast", "deep"])
+        self.assertEqual(rec["shadow"]["a80_all"][1][0], 68.0)
+        self.assertEqual(len(self.sent), 3)
 
     def test_all_invalid_votes_keep_fallback(self):
         self.prepare_round([R.Tier("fast", 1, "fake", None, 1, 20)])
