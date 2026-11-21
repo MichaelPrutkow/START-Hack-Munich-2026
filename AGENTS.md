@@ -319,7 +319,7 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Spiel 21 erklärt: Verluste aus angenommenen überhöhten Forderungen bei Handwerksleistungen (Leckreparatur, Trocknung, Rohr freilegen, Trockner); Deckung richtig. Fälle 19–21 lesend nach `out/cases/` entschlüsselt (außerhalb der Spielfenster).
 - 189 Tests ok. **Philip: Runner stoppen, `git pull --ff-only`, in `.env` `A_MULT=0.75` setzen, neu starten.** Offen: unabhängige Kontrollschätzung nur protokollieren (Kaans Punkt 3).
 
-### 21.11.2026 · Codex · Preisqualität und unabhängige Kontrolle (Implementierung geprüft)
+### 21.11.2026 · Codex · Preisqualität und unabhängige Kontrolle (fertig)
 
 - Nutzer autorisiert Umsetzung der Verbesserungen aus dem 404-Vergleich. Basis `4536020`; Michaels Recall-Schutz und Prompt v3 bleiben erhalten. Isolierter Checkout, keine Live-Abgaben oder Änderungen an Philips .env.
 - [X] übernimmt für diese Aufgabe `runner.py`, neues Kontroll-/Diagnosemodul, `feedback.py`, zugehörige Tests und Dokumentation. Kontrollschätzung bleibt Shadow; Forderungs- und Reviewer-Effekte werden getrennt abgerechnet.
@@ -328,3 +328,5 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Automatischer Lernbericht: rohe bedingte Schätzung vs. belegte Preisgrenzen, getrennte a-/b-/Gesamt-Gegenrechnungen für Kontrollpreise und Entfernen von Recall-Caps, je Spiel und ohne bestes Spiel. Die andere Rolle behält tatsächliche Zahlungen; keine Intervallmitte als erwarteter Gewinn. Letzte fünf Runden mit Commit/Kontrollstatus und größten Verlustpositionen. `learn.py --status` zeigt die Vergleiche ohne neue Modellaufrufe.
 - 200 Offline-Tests: 199 bestanden, einer mangels lokaler Case-0-PDF übersprungen. Neu geprüft: keine Veröffentlichung durch Kontrolle, Ausfall/Frist/Shared Caps, unveränderte bestätigte Preise, rollengetrennte Abrechnung und automatischer State-/Report-Rundlauf. Kein Live-Runner, keine Strategie-LLM-Anfrage.
 - Michaels zwischenzeitliche `2b12f53`/`6de616f` werden vor Push integriert und gemeinsam geprüft. Seine manuellen Preisparameter und Kalibrierungsprüfungen bleiben erhalten; keine .env geändert. Produktions-Gewinnwirkung noch zu messen.
+
+- Abschluss: Michaels `2b12f53` und `6de616f` vollständig integriert. Gemeinsamer Stand erneut mit 200 Offline-Tests geprüft (199 bestanden, 1 fehlende Case-0-PDF übersprungen); `git diff --check` sauber. Für Philip: zwischen Runden bestehenden Runner stoppen, pullen, genau einen Runner neu starten. Kontrolle standardmäßig nur als zusätzliche Auswertung bei Restzeit; die automatische Nachrunden-Lernschleife erstellt die Berichte.
