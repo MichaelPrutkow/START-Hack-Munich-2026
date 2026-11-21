@@ -422,6 +422,7 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
             except (TypeError, ValueError, KeyError):
                 excluded.append({"record": number, "reason": "malformed round JSON"})
     reports, memory, cohorts, training_exclusions, historical_rows = [], [], {}, [], []
+    prepared_grid = []
     for gid, rec in sorted(records.items()):
         if checkpoint:
             checkpoint()  # Outside quarantine: a scheduling deadline aborts the whole rebuild.
@@ -474,6 +475,7 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
                             "field_counts": _field_counts(lines, data["tx"], team),
                             "legacy_recovered": bool(rec.get("legacy_recovered")),
                             "recovery_reason": rec.get("legacy_recovery_reason")})
+            prepared_grid.append((rec, data, lines, final))
         except (OSError, TypeError, ValueError, KeyError, OverflowError, AttributeError, IndexError) as exc:
             # A partially processed game must not leak into recall or calibration.
             memory = [m for m in memory if m["game"] != gid]
@@ -503,7 +505,20 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
         candidate = _calibrate(rows, rows[0]["identity"], team, checkpoint, historical_rows)
         candidate["validated_at"] = created.isoformat() if candidate["status"] == "validated" else None
         calibrations.append(_retain_candidate(candidate, rows, prior, team, created, checkpoint))
-    return {"schema_version": SCHEMA_VERSION, "algorithm": ALGORITHM,
+    from .parameter_grid import evaluate
+    window = []
+    for path in cache_dir.glob("game_*.json"):
+        if checkpoint:
+            checkpoint()
+        try:
+            gid = int(path.stem.split("_")[-1])
+            if gid > 0 and (before_game is None or gid < before_game):
+                C.validate_game(_strict_json(path.read_text()), gid=gid)
+                window.append(gid)
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+    grid = evaluate(prepared_grid, window, team, checkpoint)
+    return {"parameter_grid": grid, "schema_version": SCHEMA_VERSION, "algorithm": ALGORITHM,
             "controls": {**CONTROLS, "a_mult_grid": list(A_MULT_GRID)},
             "campaign": CAMPAIGN, "team": team,
             "created_at": created.isoformat(), "max_game": max((g["game"] for g in reports), default=0),
@@ -934,6 +949,8 @@ def render_report(state):
             lines.append(f"- Game {game['game']} legacy prices recovered and settlement-reconciled: {game['recovery_reason']}.")
     for excluded in state["excluded"]:
         lines.append(f"- Excluded {excluded.get('game', 'record ' + str(excluded.get('record')))}: {excluded['reason']}")
+    from .parameter_grid import report
+    lines += report(state.get("parameter_grid"))
     return "\n".join(lines) + "\n"
 
 

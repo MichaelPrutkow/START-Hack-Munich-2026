@@ -41,6 +41,8 @@ def show_state(state):
     if state is None:
         print("No current usable learning artifact; runner keeps baseline parameters.")
         return
+    from claim_to_fame.parameter_grid import report
+    print("\n".join(report(state.get("parameter_grid"))))
     validated = sum(c["status"] == "validated" for c in state["calibrations"])
     print(f"Learning: {len(state['games'])} reconciled games, {state['summary']['lines']} lines, "
           f"{len(state['excluded'])} excluded; {validated} validated calibrations.")

@@ -177,3 +177,31 @@ holdout validation or expected profit. No report automatically changes parameter
 Keep Michael's prompt-v3 pricing configuration; this update does not change `.env`,
 `A_MULT`, `SIGMA`, or automatic calibration gates. On Philip's machine stop the existing
 runner between rounds **before pulling**, then restart exactly one instance.
+
+### Parametervergleich nach jeder abgeschlossenen Runde
+
+Die automatische Lernschleife berechnet außerhalb des Spielfensters einen rückblickenden
+Vergleich für die letzten zehn vollständig gecachten Spiele. `LEARNING_AUTO` muss aktiviert
+sein; `AUTO_TUNE=0` verhindert diese Auswertung nicht. Keine zusätzlichen LLM-Aufrufe.
+Das Raster enthält A_MULT 0,50–1,10 in 0,05-Schritten und SIGMA
+0,20 / 0,30 / 0,35 / 0,50 / 0,65 / 0,80 / 1,00 / 1,20 / 1,40,
+zusätzlich tatsächlich verwendete Paare. Nach Veröffentlichung der Abrechnung wird es
+beim nächsten erfolgreichen automatischen Refresh aktualisiert; bei Zeitmangel bleibt
+der vorige Bericht erhalten.
+
+`uv run learn.py --status` zeigt die besten Kombinationen und den Sieger je Spiel.
+`out/learning-report.md` enthält die Übersicht; `out/learning.json` unter
+`parameter_grid.ranking` alle Kombinationen mit Einzelrundenergebnissen.
+Ein sofortiger Offline-Neuaufbau aus vorhandenen Logs und Cache ist mit
+`uv run learn.py` möglich (ohne `--refresh`, keine neuen Modellaufrufe).
+
+Verglichen werden die ursprünglichen gespeicherten Schätzungen und Deckungswahrscheinlichkeiten,
+nicht aus alten Forderungen zurückgerechnete Preise. Bias, Police-Limits und damaliger Recall
+bleiben erhalten. Erst muss der ursprüngliche Preis exakt reproduzierbar sein; andernfalls
+bleibt die Position für alle Kombinationen unverändert und wird als Ausschluss ausgewiesen.
+Fehlende jüngere Spiele werden nicht durch ältere ersetzt. Die Rangfolge nutzt die konservative
+Gewinnuntergrenze; überlappende Spannen und Gleichstände belegen keinen eindeutigen Sieger.
+Der Vergleich ohne die beste Runde zeigt Konzentration auf einzelne Gewinne. Verschiedene
+Modell-/Promptstände können im Fenster enthalten sein. Dies ist eine rückblickende Auswertung
+bei unveränderten Gegnerabgaben, keine unabhängige Prognose und keine automatische
+Änderung von A_MULT oder SIGMA. Der vorhandene validierte Kalibrierungsweg bleibt separat.

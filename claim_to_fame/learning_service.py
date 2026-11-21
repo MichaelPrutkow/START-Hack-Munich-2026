@@ -150,6 +150,7 @@ def refresh_once(team, rounds_path, cache_dir, output_path, report_path=None, *,
                 C.atomic_text(report_path, report, deadline=guard)
             C.atomic_json(output_path, json.loads(state_text), deadline=guard)
             status.update(status="updated", games=sorted(new_games),
+                          parameter_grid_best=state.get("parameter_grid", {}).get("best"),
                           validated_calibrations=sum(c.get("status") == "validated" for c in state["calibrations"]))
     except C.RefreshBusy:
         status.update(status="busy", reason="another process is refreshing learning")
@@ -207,6 +208,13 @@ class LearningService:
         result = refresh_once(*self.args, schedule=self._current_schedule, **self.options)
         with self._lock:
             self.status = result
+        best = result.get("parameter_grid_best")
+        if result.get("status") == "updated" and best:
+            import logging
+            logging.getLogger("c2f").info(
+                "parameter grid (retrospective only): A_MULT %.3f SIGMA %.3f; net %s..%s; delta %s..%s",
+                best["a_mult"], best["sigma"], best["lower"], best["upper"],
+                best["delta_lower"], best["delta_upper"])
 
     def close(self):
         """Cancel future work/requests immediately; never block live shutdown on HTTP."""
