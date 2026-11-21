@@ -42,9 +42,10 @@ def test_real_case0_pdf():
 
 
 def test_price_rule():
-    # p = 1: a = 0.9 m, b = m * exp(0.35 * z(1/3)) ~ 0.86 m
+    # p = 1: a = A_MULT m, b = m * exp(SIGMA * z(1/3)) ~ 0.86 m for SIGMA 0.35
+    R.A_MULT, R.SIGMA = 0.85, 0.35
     a, b = R.price(1.0, 100.0, None, None, 50.0)
-    assert a == 90.0 and 85.0 < b < 87.0, (a, b)
+    assert a == 85.0 and 85.0 < b < 87.0, (a, b)
     # less sure it is covered -> lower b; p <= 2/3 -> reject everything
     _, b9 = R.price(0.9, 100.0, None, None, 50.0)
     _, b7 = R.price(0.7, 100.0, None, None, 50.0)
@@ -55,7 +56,7 @@ def test_price_rule():
     assert R.price(1.0, 100.0, None, 40.0, 50.0) == (40.0, 40.0)
     # no estimate -> fallback base, never 0/0 charge
     a, _ = R.price(0.2, 0.0, None, None, 50.0)
-    assert a == 45.0
+    assert a == 42.5
     for x in R.price(1.0, 1e-9, None, None, 50.0):
         assert math.isfinite(x) and x >= 0
 

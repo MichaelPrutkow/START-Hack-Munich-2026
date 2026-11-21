@@ -32,9 +32,17 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 
 - Offizielles Material liegt jetzt im Workspace-Ordner `start_hack_munich/` (eine Ebene über dem Repo): `API_HANDBOOK.md`, `starter_script.py`, `pixi.toml`, `GAME_DESCRIPTION.pdf`, `EVALUATION_CRITERIA.pdf`, Deep-Dive-PDF, `Hackathon presentation 21.11.26.pdf`. Inhalt deckt sich mit den Markdown-Abschriften in `~/Downloads/starthack 2/offiziell/`. [C]
 - API-Handbuch, neu gegenüber den Folien: ausgelassene Positionen nehmen trotzdem teil (0/0); 422 bei negativen oder nicht endlichen Werten; 403 auch „Game has already ended“; Team, das nach Spielstart angelegt wurde, spielt erst ab dem nächsten Spiel. Basis-URL `https://c2f.public.quantco.cloud`. [C]
-- Fall-Zips: verschlüsselt im Drive, Passwort (= `decryption_key`) kommt pro Spiel über `GET /api/games/{id}/key` ab `start_time`. Zips müssen **vorher** lokal nach `cases/` (Spielnummer im Dateinamen). Noch keine Zips im Ordner. [C]
+- Fall-Zips: verschlüsselt im Drive, Passwort (= `decryption_key`) kommt pro Spiel über `GET /api/games/{id}/key` ab `start_time`. Zips müssen **vorher** lokal nach `cases/` (Spielnummer im Dateinamen). Alle 101 Zips (0–100) liegen im Drive, AES-verschlüsselt, pyzipper öffnet sie ohne 7z (geprüft 21.11. 13:46). [C]
 - `origin/main` enthält bereits `runner.py` (fertiger Rundenlauf: Key → 7z/pyzipper → PDF parsen → vorläufige Regel-Abgabe → LLM-Votes → finale Abgabe → Echo-Check), `pyproject.toml` (uv), `.env.example`, `.gitignore` (`.env`, `cases/`, `out/`, `*.zip`). Zusätzlich Remote-Branch `origin/runner`. [C]
-- ⚠️ Der lokale `reset` auf `origin/main` (13:47) hat diese `AGENTS.md` aus dem Arbeitsordner entfernt, sie war nie committet. Claude hat sie wiederhergestellt. **Bitte committen**, damit sie nicht wieder verloren geht. [C]
+
+## Live-Betrieb (Stand 21.11. 14:32) [C]
+
+- **Team:** `chineseModels`. **Runner:** nur Philips Mac. Setup und Startbefehl stehen in `README.md` (`brew install uv sevenzip`, `uv sync`, dann `source .venv/bin/activate && python3 runner.py --check && caffeinate -i python3 runner.py`). Spiele alle 800 s ab 14:00:00 (14:13:20, 14:26:40, 14:40:00 …), Fenster 60 s. Neustart nur in den Minuten dazwischen.
+- **Preisregel** (`runner.py: price`): `a = A_MULT × m`, `b` so dass `p · P(T ≥ b) = 2/3` mit `T ~ m·exp(SIGMA·Z)`, `b = 0` bei `p ≤ 2/3`. Einstellbar per `.env` (nur lokal, nicht in Git): `A_MULT` (Default jetzt 0,85, seit Spiel 3 aktiv), `SIGMA` (0,35). Spiel 3 mit 0,85: +4.528, bestes Team der Runde.
+- **Befund Spiel 1–2:** Unser b war fast perfekt. Unser a lag in 3 von 4 gedeckten Positionen knapp **über** t (LLM überschätzt t um ~10–15 %). Vier Teams geben gar nicht ab und lehnen alles ab → jede faire Forderung bringt von ihnen 1,5a, jede überhöhte nichts.
+- **Kalibrierung:** `uv run calibrate.py --team chineseModels` (liest nur, cached in `out/leaderboard/`, 1 Anfrage/s). Für t/m und Backtest auf Philips Rechner laufen lassen, dort liegt `out/rounds.jsonl` (ab dem Update mit `est` je Position).
+- **Tests:** `uv run python test_runner.py` (offline, Parser gegen Case-0-PDF und Preisregel).
+- **Entscheidungen mit Messwerten:** `notes/DECISIONS.md`. Jede Parameteränderung dort mit Beleg und Ergebnis eintragen (Basis fürs Write-up).
 
 ## Aufgabenboard
 
@@ -42,12 +50,12 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 |---|---|---|---|---|
 | 1 | Projektkontext und Quellen auswerten | [X] | fertig | `AGENTS.md` |
 | 2 | Board, Konventionen, Challenge-Stand | [C] | fertig | `AGENTS.md` |
-| 3 | `AGENTS.md` committen und pushen | [U] | offen | `AGENTS.md` |
-| 4 | `.env` füllen, alle Fall-Zips aus dem Drive nach `cases/` | [U] | offen | `.env`, `cases/` |
-| 5 | `uv run runner.py --check`, dann `--game 0` (Formattest) **vor 14:00** | [U] | offen | `runner.py` |
-| 6 | Genau einen Runner-Rechner bestimmen, `caffeinate -i uv run runner.py` starten | [U] | offen | `out/` |
-| 7 | Review `runner.py`: Parser gegen Case-0-PDF, Brutto/MwSt., Strategie a/b | – | offen | `runner.py` |
-| 8 | Auswertung der ersten Runden (Leaderboard), Kalibrierung von a/b | – | offen | `analysis/` |
+| 3 | `AGENTS.md` committen und pushen | [U] | fertig | `AGENTS.md` |
+| 4 | `.env` füllen, alle Fall-Zips aus dem Drive nach `cases/` | [U] | fertig | `.env`, `cases/` |
+| 5 | `uv run runner.py --check`, dann `--game 0` (Formattest) **vor 14:00** | [C] | fertig (13:46, Echo ok) | `runner.py` |
+| 6 | Genau einen Runner-Rechner bestimmen, `caffeinate -i uv run runner.py` starten | [U] | fertig: **nur Philips Mac** | `out/` |
+| 7 | Review `runner.py`: Parser gegen Case-0-PDF, Brutto/MwSt., Strategie a/b | [C] | fertig | `runner.py`, `test_runner.py` |
+| 8 | Auswertung der ersten Runden (Leaderboard), Kalibrierung von a/b | [C] | in Arbeit | `calibrate.py` |
 | 9 | Write-up (1 Seite) und Pitch | – | offen | `writeup/` |
 
 ## Offene Fragen
@@ -56,8 +64,9 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 - [ ] Zählen späte Runden mehrfach (August: letzte 20 dreifach)? → Orga/Discord fragen. [X]
 - [ ] Höhe der absoluten Untergrenze von `c`. [X]
 - [ ] Dürfen August-Preisanker und automatisiert gelesene Leaderboard-Transaktionen genutzt werden? → Orga fragen. [X]
+  - ✓ Leaderboard: Scrapen erlaubt, nur nicht im Millisekundentakt (Orga, mündlich an Michael, 21.11. 14:11). August-Daten: weiter nicht nutzen (Michaels Regel). [U/C]
 - [ ] Format und genaue Frist des Write-ups (max. 1 Seite). [X]
-- [ ] Wer ist der eine Runner (Rechner läuft über Nacht, Strom, WLAN)? [C]
+- [x] Wer ist der eine Runner? → Philips Mac. Auf keinem anderen Rechner `runner.py` starten (auch nicht `--game`), sonst zwei Abgaben. [U]
 - [ ] Ist `MichaelPrutkow/START-Hack-Munich-2026` privat? Falldaten dürfen nicht öffentlich werden. [C]
 - [ ] Liegen alle Fall-Zips (bis So 12:00) schon im Drive oder kommen sie nach und nach? [C]
 
@@ -111,3 +120,9 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Offizielles Material im Workspace und `runner.py` auf `origin/main` gesichtet, Befunde oben unter „Stand Repo und Material“.
 - `AGENTS.md` war durch `git reset` auf `origin/main` gelöscht und wurde aus Claudes letzter Version wiederhergestellt (inkl. Codex-Ergänzungen bis 13:38).
 - Nächster Schritt: Zeilen 3–6 vor 14:00 durch das Team, danach Review `runner.py` (Zeile 7).
+
+### 21.11.2026 14:27 · Claude · Runner verifiziert, Preisregel, Kalibrierung
+
+- Runner gegen echtes `API_HANDBOOK.md` geprüft (Header, Endpunkte, PUT-Format, Echo über `line_item_index`): passt. Spiel 0 komplett durchgespielt, 4 Positionen, Echo ok.
+- Parser hängt umbrochene Beschreibungszeilen an und nimmt die letzte Zahl+Einheit der Zeile. Preisregel a/b neu (siehe Live-Betrieb), Begründung per Auszahlungssimulation. `calibrate.py` neu, Runner loggt `est` (p, m) je Position.
+- Nächster Schritt: nach 5–10 Spielen `calibrate.py` auf Philips Rechner laufen lassen und `A_MULT`/`SIGMA` aus echten Daten setzen.

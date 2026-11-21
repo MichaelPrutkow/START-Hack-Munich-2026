@@ -521,8 +521,9 @@ def aggregate(votes):
 # a and b relative to m (our median of t), from the official payoff table:
 # - accepting an incoming a pays off iff P(t >= a) > 2/3, so b = the point where
 #   p * P(T >= b) = 2/3 with T ~ m * exp(SIGMA * Z); b = 0 if p <= 2/3.
-# - charging: a * P(t >= a) peaks below m; a = A_MULT * m (payoff sim: 0.9 robust).
-A_MULT = float(os.environ.get("A_MULT", "0.9"))
+# - charging: a * P(t >= a) peaks below m; a = A_MULT * m. 0.85 from the backtest on games 1-2
+#   (notes/DECISIONS.md): our LLM estimate m tends to sit slightly above t.
+A_MULT = float(os.environ.get("A_MULT", "0.85"))
 SIGMA = float(os.environ.get("SIGMA", "0.35"))
 
 
