@@ -292,13 +292,17 @@ TIERS = []
 
 def llm_call(messages, n, tier, timeout=20.0):
     import openai
+    deadline = time.monotonic() + timeout
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("LLM request budget exhausted")
         name = POOL.current()
         if not name:
             raise NoKeys()
         try:
             return POOL.client(name).chat.completions.create(
-                model=tier.model, messages=messages, **({"n": n} if n > 1 else {}), **tier.extra, timeout=max(3.0, timeout),
+                model=tier.model, messages=messages, **({"n": n} if n > 1 else {}), **tier.extra, timeout=remaining,
                 response_format={"type": "json_schema",
                                  "json_schema": {"name": "line_items", "strict": True, "schema": SCHEMA}})
         except openai.AuthenticationError:
@@ -322,9 +326,21 @@ def llm_call(messages, n, tier, timeout=20.0):
                 raise
 
 
+class AssessmentError(RuntimeError):
+    def __init__(self, reason, *, attempted, pending, failures):
+        self.details = {"reason": reason, "attempted": attempted, "pending": pending, "failures": failures}
+        super().__init__(reason)
+
+
 def assess(messages, timeout, tier):
     """Returns (list of votes {index: dict}, usage dict). Votes may be fewer than tier.votes."""
+    from openai import APITimeoutError
+
+    deadline = time.monotonic() + timeout
     usage = {"prompt": 0, "cached": 0, "completion": 0, "calls": 0}
+    votes, request_errors, invalid_votes = [], [], []
+    attempted = pending = 0
+    out_of_time = False
 
     def add(resp):
         u = resp.usage
@@ -334,28 +350,67 @@ def assess(messages, timeout, tier):
             d = getattr(u, "prompt_tokens_details", None)
             usage["cached"] += (getattr(d, "cached_tokens", 0) or 0) if d else 0
         usage["calls"] += 1
-        return [parse_vote(c.message.content) for c in resp.choices]
+        if not resp.choices:
+            invalid_votes.append("no_choices")
+        for choice in resp.choices:
+            try:
+                vote = parse_vote(choice.message.content)
+            except (ValueError, TypeError, AttributeError) as exc:
+                invalid_votes.append(type(exc).__name__)
+            else:
+                if vote:
+                    votes.append(vote)
+                else:
+                    invalid_votes.append("empty_vote")
+
+    def collect(ex, n, count):
+        nonlocal attempted, pending, out_of_time
+        futures = []
+        for _ in range(count):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                out_of_time = True
+                break
+            futures.append(ex.submit(llm_call, messages, n, tier, remaining))
+        attempted += len(futures)
+        done, unfinished = wait(futures, timeout=max(0.0, deadline - time.monotonic()))
+        pending += len(unfinished)
+        for future in futures:
+            if future not in done:
+                continue
+            error = future.exception()
+            if error is not None:
+                request_errors.append(error)
+            else:
+                add(future.result())
 
     ex = ThreadPoolExecutor(tier.votes)          # no `with`: never block on a hanging call
     try:
         if tier.n_ok or tier.votes == 1:
-            fut = ex.submit(llm_call, messages, tier.votes, tier, timeout)
-            done, _ = wait([fut], timeout=timeout)
-            if fut in done and fut.exception() is None:
-                return add(fut.result()), usage
-            if fut in done and isinstance(fut.exception(), NoKeys):
-                raise NoKeys()
-            if fut not in done or tier.n_ok:       # timeout or other error: give up
-                raise RuntimeError(f"LLM failed: {type(fut.exception()).__name__ if fut in done else 'timeout'}")
-        futs = [ex.submit(llm_call, messages, 1, tier, timeout) for _ in range(tier.votes)]
-        done, _ = wait(futs, timeout=timeout)
-        votes = []
-        for f in done:
-            if f.exception() is None:
-                votes += add(f.result())
-        if not votes:
-            raise RuntimeError("all LLM calls failed")
-        return votes, usage
+            collect(ex, tier.votes, 1)
+            # A provider that rejects bundled votes can use the remaining budget.
+            if not votes and not pending and tier.votes > 1 and not tier.n_ok:
+                collect(ex, 1, tier.votes)
+        else:
+            collect(ex, 1, tier.votes)
+        if votes:
+            return votes, usage
+        if pending or out_of_time:
+            reason = "deadline"
+        elif any(isinstance(exc, (TimeoutError, APITimeoutError)) for exc in request_errors):
+            reason = "request_timeout"
+        elif request_errors and all(isinstance(exc, NoKeys) for exc in request_errors):
+            raise NoKeys()
+        elif invalid_votes:
+            reason = "invalid_response"
+        else:
+            reason = "request_error"
+        failures = list(invalid_votes)
+        for exc in request_errors:
+            status = getattr(exc, "status_code", None)
+            category = type(exc).__name__
+            failures.append(f"{category}/HTTP{status}" if type(status) is int and 400 <= status <= 599 else category)
+        raise AssessmentError(reason, attempted=attempted, pending=pending, failures=failures)
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
 
@@ -612,6 +667,7 @@ def play_game(gid, start, dry=False, use_llm=True):
     best = {"ab": rules, "tier": "rules", "est": {},
             "sources": {i: "rules" for i in items}, "levels": {i: 0 for i in items}}
     out, usage, est, vote_log = {"rules": rules}, {}, {}, {}
+    llm_failures = {}
     slock, closed = threading.Lock(), threading.Event()
     log_prices(gid, "rules", items, rules)
 
@@ -692,6 +748,7 @@ def play_game(gid, start, dry=False, use_llm=True):
             return True
 
     def run_tier(tier, msgs):
+        stage = tier.name
         try:
             budget = min(tier.budget - (time.time() - t_key), deadline - time.time() - 3)
             if budget <= 0:
@@ -699,8 +756,8 @@ def play_game(gid, start, dry=False, use_llm=True):
             voices, used = assess(msgs, budget, tier)
             part, details = candidate(tier, voices, items)
             publish(tier, part, details, voices, used)
-            log.info("[%s] %s (%s): %d/%d lines, %.1fs after key, tokens %s", gid,
-                     tier.name, tier.model, len(part), len(items), time.time() - t_key, used)
+            log.info("[%s] %s (%s): %d/%d lines, %d/%d votes, %.1fs after key, tokens %s", gid,
+                     tier.name, tier.model, len(part), len(items), len(voices), tier.votes, time.time() - t_key, used)
             # A bounded second look uses remaining time only after a complete
             # submission exists; no deadline extension and no extra submitter.
             if tier.name != "deep" or os.environ.get("FOCUS_ENABLED", "1") == "0" or closed.is_set():
@@ -715,14 +772,20 @@ def play_game(gid, start, dry=False, use_llm=True):
             if not focused_items:
                 return
             focused = Tier("focus", tier.level + 0.5, tier.model, tier.extra.get("reasoning_effort"), 2, budget)
+            stage = focused.name
             fm = build_focus_prompt(policy, desc, focused_items, details, historical_context=history)
             fv, fu = assess(fm, budget, focused)
             fp, fe = candidate(focused, fv, focused_items)
             publish(focused, fp, fe, fv, fu)
         except NoKeys:
-            log.error("[%s] %s: all OpenAI keys exhausted", gid, tier.name)
+            log.error("[%s] %s: all OpenAI keys exhausted", gid, stage)
+        except AssessmentError as exc:
+            details = {**exc.details, "budget_seconds": round(budget, 2), "elapsed_seconds": round(time.time() - t_key, 2)}
+            with slock:
+                llm_failures[stage] = details
+            log.error("[%s] %s failed: %s", gid, stage, details)
         except Exception as e:
-            log.error("[%s] %s error %s", gid, tier.name, type(e).__name__)
+            log.error("[%s] %s error %s", gid, stage, type(e).__name__)
 
     if use_llm and POOL.current():
         msgs = build_prompt(policy, desc, items, historical_context=history)
@@ -741,7 +804,7 @@ def play_game(gid, start, dry=False, use_llm=True):
         rec = {"game": gid, "campaign": "2026-11", "lines": len(items), "winner": best["tier"],
                "ok": prov_ok or best["tier"] != "rules", "dry": dry,
                "t_provisional": round(t_prov, 2), "t_end": round(time.time() - t_key, 2),
-               "usage": dict(usage), "models": {t.name: t.model for t in TIERS},
+               "usage": dict(usage), "llm_failures": llm_failures.copy(), "models": {t.name: t.model for t in TIERS},
                "items": items, "tiers": dict(out), "est": dict(est), "votes": dict(vote_log),
                "final_ab": final, "line_sources": best["sources"].copy(),
                "a_mult": A_MULT, "sigma": SIGMA, "settings": SETTINGS_SOURCE, "commit": GIT_COMMIT,

@@ -76,6 +76,8 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 19 | Automatische Lernanbindung, Diagnose, Dokumentation und Integration | [X] | fertig | `runner.py`, `learn.py`, `watch.py`, `tests/`, `README.md`, `.env.example`, `notes/BRIEFING_ALIGNMENT.md`, `writeup/`, `AGENTS.md` |
 | 20 | Eindeutige alte Abgaben wiederverwenden | [X/pricing] | fertig | `claim_to_fame/legacy.py`, `tests/test_legacy.py` |
 | 21 | Recall-Deckel für a aus eigenen abgerechneten Spielen (Schatten/live per `.env`) | [C] | review | `claim_to_fame/recall.py`, `runner.py`, `tests/test_recall.py`, `.env.example`, `README.md`, `notes/DECISIONS.md` |
+| 22 | Spiel 19: Deep-Ausfall und Nettobilanz nachvollziehen | [X] | fertig | `AGENTS.md` |
+| 23 | Deep-Zeitbudget, Fehlerdiagnose und lokales Latenzprofil | [X] | fertig | `runner.py`, `tests/test_runtime.py`, `.env`, `.env.example`, `README.md`, `AGENTS.md` |
 
 ## Offene Fragen
 
@@ -282,3 +284,17 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - `claim_to_fame/recall.py`: vor der Preisbildung frühere Spiele mit gleicher Policen-Kennung aus `out/cases/` + `out/leaderboard/` lesen, ähnliche Positionen finden, bei beidseitig begrenzter t-Spanne `a` auf deren Mitte deckeln. Nur senken, `b` unverändert, Zeilen mit Dokumentbetrag ausgenommen. `RECALL_CAP` wird jedes Spiel aus `.env` gelesen: `shadow` (Default), `1`, `loose`, `0`. Rundenrekord `recall`, je Zeile `recall_cap`/`recall_applied`. Fehler im Recall blockieren keine Runde.
 - Backtest und Vergleich: `notes/DECISIONS.md` Zeile 17:45. Tests: 174 (173 ok, 1 Case-0-PDF übersprungen), neu `tests/test_recall.py` (10). `strategy_identity` unverändert; gedeckelte Zeilen fallen aus dem Parameterlernen.
 - Nächster Schritt: Michaels OK zum Push; Philip `git pull --ff-only`, Neustart zwischen zwei Spielen, `RECALL_CAP=1` in `.env`.
+
+### 21.11.2026 · Codex · Spiel 19 nachgerechnet
+
+- `77ff9a6`, `out/runner.log`, `out/rounds.jsonl` und vollständige öffentliche Abrechnung in `out/leaderboard/game_019.json` abgeglichen. Fast bestätigte alle 11 Positionen bei T+14,1 s. Deep (Astra, High, drei Stimmen) endete ohne verwertbare Antwort bei T+52,66 s, nahe Modell-Cutoff T+53 s. `assess()` kapselt Timeout und andere Call-Fehler in `RuntimeError`. Das aktuelle Log zeigt nur die Klasse, sodass die genaue Ursache offen bleibt. Gleiches Setup in Spiel 18 nach 25 s erfolgreich.
+- Rang 8/12, 4.967,40 € erhalten, 4.683,70 € gezahlt, netto +283,70 €. Lautsprecher +1.046,54 € bei a=176,80 €, t in [252,30; 309,52). TV −881,84 € bei a=204 €, b=254,64 €, t ≥456,37 €. Fünf faire Ablehnungen auf den beiden Positionen kosteten 893,51 € Aufschlag. Übrige neun zusammen +119,00 €, keine belegbar überhöhten Forderungen angenommen.
+- TV-Stimmen: 275/300/350 €, jeweils Ersatz nach Vorzustand und Halbierung wegen fehlenden Überspannungsschutzes. Offen bleibt, welcher Teil der Bewertung vom offiziellen t abwich.
+- `AUTO_TUNE=0`: a-Multiplikator 0,68 (G18: 0,85), Sigma 0,35. Aktiver Recall-Deckel von 284,28 € auf Pos. 1 griff nicht; TV hatte keinen. Replay nur für a auf Pos. 1/2 mit 0,85 und gleichem b: +1.577,60 bis +2.147,10 € gegenüber Ist, rein rückblickend. Keine Live-Einstellung geändert.
+
+### 21.11.2026 · Codex · Deep-Zeitbudget und Latenzprofil
+
+- Lokale `.env` auf `DEEP_REASONING=medium` und `DEEP_VOTES=1` gesetzt, doppelte Definitionen dieser zwei Schlüssel bereinigt. Alter Stand war `high` und `3`. Sonstige Zeilen bytegenau erhalten. Aktive Stufen lesen diese Einstellungen beim Start; der bestehende Runner läuft bis zum Neustart zwischen zwei Spielen mit seiner bisherigen Konfiguration. Eine Stimme senkt den Aufwand und entfernt den Stimmenvergleich dieser Stufe. Laufzeitgewinn noch live zu messen.
+- `runner.py`: gemeinsames monotones Budget für gebündelte und einzelne Stimmen sowie API-Retries, nutzbare Stimmen bei Teilfehlern erhalten. Fehlerdiagnose unterscheidet Deadline, Request-Timeout, HTTP-/Request-Fehler und unbrauchbare Antworten. `llm_failures` protokolliert nur Kategorien, sichere Statuscodes, Anzahl gestarteter/offener Requests und Zeiten. Focus-Fehler erscheinen unter der eigenen Stufe.
+- `A_MULT=0.68`, `SIGMA=0.35` und `AUTO_TUNE=0` beibehalten: gepaarter Rückvergleich auf 64 Positionen in vollständigen Spielen 13–19 begünstigte 0,68 gegenüber 0,75/0,80/0,85 bei konservativer Gesamtuntergrenze. Einzelne Spiele tragen stark zum Ergebnis bei. Der Vergleich ist rückblickend. TV-Wertschätzung bleibt eine separate Preisfrage.
+- 179 Offline-Tests bestanden. Startkonfiguration mit entladenen Shell-Overrides geprüft, ohne Runner-Start oder API-Aufruf. Neustart bei Bedarf mit `env -u DEEP_REASONING -u DEEP_VOTES python3 runner.py` auf Philips Rechner zwischen Runden.

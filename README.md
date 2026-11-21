@@ -112,6 +112,8 @@ The briefing audit, implemented gaps and remaining experiments are documented in
 
 The one-page submission text and three-minute pitch with Q&A are in [`writeup/ONE_PAGE.md`](writeup/ONE_PAGE.md) and [`writeup/PITCH.md`](writeup/PITCH.md). Their game-8 numbers are a dated snapshot, not final standings.
 
+If Deep frequently finishes late, a latency-first trial is `DEEP_REASONING=medium` and `DEEP_VOTES=1`. Keep one assignment per key in `.env`. The model tier configuration loads at process start, so restart the existing runner between game windows. A single vote reduces work and also removes Deep's cross-vote consensus. Watch the per-tier arrival time and vote count. Failed assessments log a sanitized reason, budget, elapsed time and known HTTP status in `out/runner.log` and `out/rounds.jsonl` (`llm_failures`). Bundled and single-vote fallbacks share one deadline.
+
 ## Code layout
 
 | Path | Responsibility |

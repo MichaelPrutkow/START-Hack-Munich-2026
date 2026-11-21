@@ -1,4 +1,5 @@
 """Exercise module boundaries with fake case data, API and LLM responses."""
+from concurrent.futures import Future
 import os
 from pathlib import Path
 import threading
@@ -9,6 +10,68 @@ from unittest.mock import Mock, patch
 
 import runner as R
 from claim_to_fame import pricing
+
+
+def llm_response(*contents):
+    return SimpleNamespace(usage=None, choices=[SimpleNamespace(message=SimpleNamespace(content=content))
+                                                for content in contents])
+
+
+class AssessmentTests(unittest.TestCase):
+    def test_unbundled_votes_use_only_remaining_time(self):
+        tier = R.Tier("deep", 2, "fake", "high", 3, 10)
+        now = [100.0]
+        calls = []
+
+        def provider(messages, n, tier, timeout):
+            calls.append((n, timeout))
+            if n > 1:
+                now[0] += 3
+                tier.n_ok = False
+                raise RuntimeError("unsupported")
+            return llm_response('{"items":[{"index":1}]}')
+
+        with patch.object(R.time, "monotonic", side_effect=lambda: now[0]), patch.object(R, "llm_call", provider):
+            votes, usage = R.assess([], 10, tier)
+        self.assertEqual(calls, [(3, 10), (1, 7), (1, 7), (1, 7)])
+        self.assertEqual(len(votes), 3)
+        self.assertEqual(usage["calls"], 3)
+
+    def test_deadline_and_request_timeout_are_distinct(self):
+        tier = R.Tier("deep", 2, "fake", "high", 1, 10)
+        pending = Future()
+        with patch.object(R, "ThreadPoolExecutor", return_value=Mock(submit=Mock(return_value=pending))), \
+                patch.object(R, "wait", return_value=(set(), {pending})):
+            with self.assertRaises(R.AssessmentError) as deadline:
+                R.assess([], 10, tier)
+        self.assertEqual(deadline.exception.details, {
+            "reason": "deadline", "attempted": 1, "pending": 1, "failures": [],
+        })
+        with patch.object(R, "llm_call", side_effect=TimeoutError("private contents")):
+            with self.assertRaises(R.AssessmentError) as request:
+                R.assess([], 10, tier)
+        self.assertEqual(request.exception.details, {
+            "reason": "request_timeout", "attempted": 1, "pending": 0, "failures": ["TimeoutError"],
+        })
+
+    def test_bad_choices_do_not_discard_other_votes(self):
+        tier = R.Tier("deep", 2, "fake", "high", 3, 10)
+        response = llm_response(None, '{"items":[{"index":1}]}', "not JSON")
+        with patch.object(R, "llm_call", return_value=response):
+            votes, usage = R.assess([], 10, tier)
+        self.assertEqual(votes, [{1: {"index": 1}}])
+        self.assertEqual(usage["calls"], 1)
+
+    def test_http_failure_records_status_and_never_body(self):
+        class ProviderError(RuntimeError):
+            status_code = 503
+
+        tier = R.Tier("deep", 2, "fake", "high", 1, 10)
+        with patch.object(R, "llm_call", side_effect=ProviderError("private contents")):
+            with self.assertRaises(R.AssessmentError) as failure:
+                R.assess([], 10, tier)
+        self.assertEqual(str(failure.exception), "request_error")
+        self.assertEqual(failure.exception.details["failures"], ["ProviderError/HTTP503"])
 
 
 class RuntimeTests(unittest.TestCase):
@@ -109,6 +172,22 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(rec["winner"], "rules")
         self.assertTrue(rec["ok"])
         self.assertEqual(self.sent, [("provisional", {1: (130, 130), 4: (60, 60)})])
+
+    def test_failed_deep_keeps_fast_and_records_reason(self):
+        self.prepare_round([R.Tier("fast", 1, "fake", None, 1, 20), R.Tier("deep", 2, "fake", None, 1, 50)])
+
+        def assess(messages, timeout, tier):
+            if tier.name == "deep":
+                raise R.AssessmentError("deadline", attempted=1, pending=1, failures=[])
+            return [{1: {"covered_prob": 1, "t_if_covered": 100}}], {}
+
+        with patch.object(R, "assess", assess), self.assertLogs("c2f", level="ERROR") as logs:
+            rec = R.play_game(1, time.time(), dry=True)
+        self.assertEqual(rec["winner"], "fast")
+        self.assertEqual(rec["confirmed"], ["provisional", "fast"])
+        self.assertEqual(rec["llm_failures"]["deep"]["reason"], "deadline")
+        self.assertLessEqual(rec["llm_failures"]["deep"]["budget_seconds"], 50)
+        self.assertIn("deep failed", logs.output[0])
 
     def test_disputed_deep_line_keeps_consistent_fast_and_records_real_sources(self):
         self.prepare_round([R.Tier("fast", 1, "fake", None, 3, 20),
