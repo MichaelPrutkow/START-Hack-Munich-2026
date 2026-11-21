@@ -77,6 +77,26 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(state["calibrations"][0]["status"], "shadow")
         self.assertIsNone(F.calibration_for(state, "fast", model="model-a", prompt_hash="prompt-a", config_hash="config-a"))
 
+    def test_control_and_recall_diagnostics_survive_automatic_rebuild(self):
+        rec, data = fixture()
+        rec["commit"] = "test-code"
+        rec["control_shadow"] = {"status": "completed", "ab": {"1": [85, 100]}}
+        rec["est"]["fast"]["1"].update(recall_b_applied=True, b_before_recall=100)
+        self.add(rec, data)
+        state = self.state()
+        self.assertEqual(state["excluded"], [])
+        self.assertEqual(state["reports"][0]["commit"], "test-code")
+        row = state["reports"][0]["lines"][0]
+        self.assertEqual(row["decision_review"]["variants"]["independent_control_b"],
+                         {"lower": 50, "upper": 50})
+        report = F.render_report(state)
+        self.assertIn("without_recall_b", report)
+        self.assertIn("test-code", report)
+        self.assertIn("Independent control never submits", report)
+        target = self.root / "learning.json"
+        F.write_state(state, target)
+        self.assertIsNotNone(F.load_state(target, before_game=2, now=NOW))
+
     def test_reviewer_unfair_outflow_and_issuer_unfair_are_distinct(self):
         rec, data = fixture(own=[130, 150])
         self.add(rec, data)

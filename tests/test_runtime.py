@@ -76,7 +76,7 @@ class AssessmentTests(unittest.TestCase):
 
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
-        self.enterContext(patch.dict(os.environ, {"FOCUS_ENABLED": "0", "PRICING_UNCERTAINTY": "0"}))
+        self.enterContext(patch.dict(os.environ, {"FOCUS_ENABLED": "0", "PRICING_UNCERTAINTY": "0", "CONTROL_SHADOW": "0"}))
         self.enterContext(patch.multiple(
             R, POOL=None, TIERS=[], A_MULT=0.85, SIGMA=0.35, DISAGREE=1.5,
         ))

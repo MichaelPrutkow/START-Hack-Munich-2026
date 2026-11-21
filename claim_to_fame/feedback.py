@@ -442,6 +442,9 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
                 row = {"game": gid, "line": line, "tier": source, "final_ab": final[line],
                        "t": [d["t"][0], d["t"][1] if math.isfinite(d["t"][1]) else None],
                        **_line_loss(d, tx, team, final[line][0])}
+                from .decision_review import review_line
+                row["decision_review"] = review_line(d, tx, team, final[line], est,
+                                                     rec.get("control_shadow") or {}, line)
                 game_rows.append(row)
                 item = _get(rec["items"], line)
                 policy_hash = rec.get("policy_hash")
@@ -466,6 +469,8 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
                 target = historical_rows if observation["historical_only"] else cohorts.setdefault(key, [])
                 target.append({"game": gid, "line": line, "d": d, "net": actual_net, **observation})
             reports.append({"game": gid, "summary": _summarize(game_rows), "lines": game_rows,
+                            "commit": rec.get("commit", "unknown"),
+                            "control_status": (rec.get("control_shadow") or {}).get("status", "not_recorded"),
                             "field_counts": _field_counts(lines, data["tx"], team),
                             "legacy_recovered": bool(rec.get("legacy_recovered")),
                             "recovery_reason": rec.get("legacy_recovery_reason")})
@@ -862,6 +867,17 @@ def render_report(state):
                            + [(f"Tier {tier}", summary) for tier, summary in state["by_tier"].items()]):
         lines.append(f"- {label}: {summary['lines']} lines, net {summary['net']:.2f}; "
                      + "; ".join(f"{key} {span(value)}" for key, value in summary["losses"].items()))
+    lines += ["", "Recent rounds (association with code version is not causal proof):"]
+    for game in state["reports"][-5:]:
+        lines.append(f"- Game {game['game']}: commit {game.get('commit', 'unknown')}, "
+                     f"net {game['summary']['net']:.2f}, control {game.get('control_status', 'not_recorded')}.")
+    worst = sorted((row for game in state["reports"][-5:] for row in game["lines"]), key=lambda row: row["net"])[:5]
+    lines += ["", "Largest negative line results in the last five reconciled rounds:"]
+    for row in worst:
+        if row["net"] < 0:
+            lines.append(f"- Game {row['game']} line {row['line']}: net {row['net']:.2f}; "
+                         f"overpay {span(row['losses']['reviewer_overpay'])}; "
+                         f"extra rejection penalty {span(row['losses']['reviewer_penalty'])}.")
     lines += ["", "Calibration remains shadow until enough chronological evidence demonstrates at least 5% conservative net improvement."]
     for candidate in state["calibrations"]:
         lines.append(f"- {candidate['tier']} / {candidate['model']}: {candidate['status']}; "
@@ -887,6 +903,27 @@ def render_report(state):
             value = behavior[f"{label}_{event}_rate"]
             rate = f"{value:.1%}" if value is not None else "unknown"
             lines.append(f"- {label} claims {event}: {rate}, {behavior[f'{label}_decision_count']} known-label decisions.")
+    from .decision_review import summarize
+    decisions = summarize(state["reports"])
+    lines += ["", "Price quality (raw estimates; bounds are not exact fair prices):",
+              "below_known_fair means a low estimate, not proof that raising the charge improves profit."]
+    for game in state["reports"]:
+        for row in game["lines"]:
+            review = row.get("decision_review", {})
+            if review.get("estimate_position") in ("below_known_fair", "above_known_unfair"):
+                lines.append(f"- Game {game['game']} line {row['line']}: raw m={review['m_raw']}, "
+                             f"p={review['covered_prob']}, {review['estimate_position']}; "
+                             f"submitted a/b={row['final_ab']}.")
+    lines += ["", "Decision experiments: change in net versus actual, opponents fixed.",
+              "Independent control never submits; without_recall removes the recorded cap.",
+              "Positive delta favors the named alternative. a and b are evaluated separately.",
+              "These are selected-line comparisons, not blind holdout validation or expected profit."]
+    for name, result in decisions.items():
+        lines.append(f"- {name}: {len(result['games'])} games, {result['lines']} lines, "
+                     f"delta {result['lower']:.2f}..{result['upper']:.2f}; "
+                     f"without best game {result['best_game']}: lower {result['without_best_game_lower']:.2f}.")
+        for gid, game in result["games"].items():
+            lines.append(f"  Game {gid}: delta {game['lower']:.2f}..{game['upper']:.2f}.")
     exclusions = {}
     for row in state.get("training_exclusions", []):
         exclusions[row["reason"]] = exclusions.get(row["reason"], 0) + 1

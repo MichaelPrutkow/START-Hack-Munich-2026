@@ -46,6 +46,13 @@ def show_state(state):
           f"{len(state['excluded'])} excluded; {validated} validated calibrations.")
     print("Training data:", state.get("learning_counts", {}))
     print("Training exclusions:", dict(Counter(x["reason"] for x in state.get("training_exclusions", []))))
+    from claim_to_fame.decision_review import summarize
+    print("Independent control:", dict(Counter(g.get("control_status", "not_recorded")
+                                              for g in state.get("reports", []))))
+    for name, result in summarize(state.get("reports", [])).items():
+        print(f"  {name}: {len(result['games'])} games, {result['lines']} lines; "
+              f"delta vs actual EUR {result['lower']:.2f}..{result['upper']:.2f}; "
+              f"without best game lower {result['without_best_game_lower']:.2f}; evaluation only")
     for candidate in state["calibrations"]:
         params = {key: candidate.get(key) for key in ("a_mult", "bias", "sigma")}
         print(f"  {candidate['tier']} ({candidate.get('model')}): {candidate['status']}; "

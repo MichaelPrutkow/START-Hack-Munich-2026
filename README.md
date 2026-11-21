@@ -139,3 +139,41 @@ Run `uv run python test_runner.py` after changes. The optional real-PDF test is 
 Commit the local work first, then run `git fetch origin` and inspect `git log --oneline HEAD..origin/main` and `git diff HEAD...origin/main`. Merge the remote branch with `git merge origin/main`, resolve any conflicts, and rerun `uv run python test_runner.py`. Changes to previously extracted blocks in `runner.py` belong in the corresponding module above. Review the resulting diff before pushing. Update `AGENTS.md` with the integration status.
 
 For a one-step pull with the same merge strategy, use `git pull --no-rebase`. This keeps local and remote commits and avoids the divergent-branches preference prompt.
+
+
+### Independent control and decision review
+
+`CONTROL_SHADOW=1` (default) evaluates up to two economically important, non-shared-cap
+positions after **all production tier/focus workers have finished** and a model submission
+has been confirmed. It uses one vote from the lowest-level configured tier. The request
+contains the original policy, damage description and selected invoice items, but no prior
+estimates or historical price context. This is an independent context check, not a claim
+that the model's errors are statistically independent. Shared caps discovered in the
+control are excluded because a subset cannot allocate a whole-case limit safely.
+
+The control never calls the submission function, never replaces an estimate, and never
+activates calibration. It has at most eight seconds, reserves three seconds before the
+runner deadline, and is skipped when fewer than four seconds remain. It adds model cost
+when it runs; `CONTROL_SHADOW=0` disables it. Existing focus and production stages retain
+priority. Raw results, status, token usage and duration are private in `rounds.jsonl`
+(`control_shadow` and `usage.control`). No second process is needed.
+
+The automatic between-round learner adds the following to `out/learning-report.md`:
+
+- Raw amount estimates relative to public fair-price intervals, separate from submitted prices.
+  An amount conditional on coverage is not called a pricing error when positive coverage
+  has not been demonstrated. These diagnostics identify discrepancies, not their cause.
+- `independent_control_a`, `_b`, `_both`: bounded changes in net if only the named decision
+  were replaced by the recorded control price; the other role keeps its actual cashflow.
+- `without_recall_a`, `_b`, `_both`: bounded changes if recorded recall caps were removed.
+  A positive value here favors **removing** the cap; a negative value favors retaining it.
+- Per-game effects, total bounds, and the lower bound excluding the best game; recent
+  commit/status history and the five worst positions in the last five reconciled rounds.
+
+`uv run learn.py --status` shows the control statuses and comparisons without model calls
+or network requests. Historical logs without a control remain usable; no control is invented.
+Comparisons cover selected positions only, keep opponents fixed, and are not independent
+holdout validation or expected profit. No report automatically changes parameters.
+Keep Michael's prompt-v3 pricing configuration; this update does not change `.env`,
+`A_MULT`, `SIGMA`, or automatic calibration gates. On Philip's machine stop the existing
+runner between rounds **before pulling**, then restart exactly one instance.

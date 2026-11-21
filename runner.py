@@ -36,6 +36,7 @@ import requests
 
 from claim_to_fame import pricing, prompts
 from claim_to_fame import feedback
+from claim_to_fame.control import assess_control
 from claim_to_fame import recall as recall_mod
 from claim_to_fame.invoices import (
     FALLBACK_LINE, FALLBACK_MAX, LINE_END_RE, LINE_RE, STOP_RE, UNIT_RATE, UNITS,
@@ -798,6 +799,28 @@ def play_game(gid, start, dry=False, use_llm=True):
             th.join(timeout=max(0.0, deadline - time.time()))
     elif use_llm:
         log.error("[%s] no usable OpenAI key: rule-based submission stands", gid)
+    # Run only after production workers have finished, using leftover time. It never
+    # calls publish/submit and never supplies estimates to the live selection path.
+    control = {"status": "disabled"}
+    if use_llm and os.environ.get("CONTROL_SHADOW", "1") == "1":
+        control = {"status": "no_time_or_confirmed_estimates"}
+        budget = min(8.0, deadline - time.time() - 3.0)
+        if budget >= 4 and best["est"] and TIERS and not any(th.is_alive() for th in threads):
+            template = min(TIERS, key=lambda t: t.level)
+            tier = Tier("control", 0, template.model, template.extra.get("reasoning_effort"), 1, budget)
+            control_started = time.monotonic()
+            try:
+                control = assess_control(policy, desc, items, best["est"], assess=assess, tier=tier,
+                                         budget=budget, a_mult=A_MULT, sigma=SIGMA, disagree=DISAGREE)
+            except AssessmentError as exc:
+                control = {"status": "failed", "failure": exc.details}
+            except Exception as exc:
+                control = {"status": "failed", "failure": type(exc).__name__}
+            control["elapsed_seconds"] = round(time.monotonic() - control_started, 3)
+            control["budget_seconds"] = budget
+            if control.get("usage"):
+                usage["control"] = control["usage"]
+        log.info("[%s] independent control (shadow): %s", gid, control["status"])
     with slock:
         closed.set()
         final = best["ab"].copy()
@@ -810,7 +833,7 @@ def play_game(gid, start, dry=False, use_llm=True):
                "items": items, "tiers": dict(out), "est": dict(est), "votes": dict(vote_log),
                "final_ab": final, "line_sources": best["sources"].copy(),
                "a_mult": A_MULT, "sigma": SIGMA, "settings": SETTINGS_SOURCE, "commit": GIT_COMMIT,
-               "confirmed": list(confirmed), **identity,
+               "confirmed": list(confirmed), "control_shadow": control, **identity,
                "policy_hash": hashlib.sha256(policy.encode()).hexdigest(),
                "recall": {"mode": recall_mode, "lines": recall_caps},
                "learning_version": state.get("schema_version") if state else None,
