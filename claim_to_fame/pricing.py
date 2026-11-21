@@ -4,7 +4,6 @@ import math
 import statistics
 from collections import Counter
 from collections.abc import Mapping
-from . import assessment
 
 log = logging.getLogger("c2f")
 
@@ -64,8 +63,6 @@ def estimate_votes(votes, *, disagree=1.5):
                 continue
         except ValueError:
             continue
-        if assessment.audit(vote)["status"] == "inconsistent":
-            continue
         valid.append((vote, p, m))
 
     probabilities = [p for _, p, _ in valid]
@@ -112,12 +109,7 @@ def estimate_votes(votes, *, disagree=1.5):
         reasons.append("document_anchor_disagreement")
     clauses = list(dict.fromkeys(v["clause"].strip() for v, _, _ in valid
                                 if isinstance(v.get("clause"), str) and v["clause"].strip()))
-    audits = [assessment.audit(v) for v, _, _ in valid]
-    categories = {a["category"] for a in audits if a["status"] == "consistent"}
-    return {"valuation_consistent": bool(audits) and all(a["status"] == "consistent" for a in audits),
-            "valuation_category": next(iter(categories)) if len(categories) == 1 else "unknown",
-            "valuation_audits": audits,
-            "p": statistics.median(probabilities) if probabilities else 0.0, "m": m,
+    return {"p": statistics.median(probabilities) if probabilities else 0.0, "m": m,
             **anchors, "log_spread": spread, "log_range": log_range, "p_spread": p_spread,
             "vote_count": len(votes), "valid_count": len(valid), "invalid_count": len(votes) - len(valid),
             "clauses": clauses, "anchor_validity": validity,
@@ -169,8 +161,7 @@ def select_focus_items(items, estimates, limit=2, min_p=0.5):
         p_spread = min(pos(estimate.get("p_spread")) or 0.0, 0.5)
         # Use logs for ranking so large finite monetary values cannot overflow.
         log_value = math.log(value) if value > 0 else -math.inf
-        score = log_value + math.log1p(spread + 2 * p_spread + bool(estimate.get("disputed"))
-                                         + estimate.get("cross_stage_log_range", 0))
+        score = log_value + math.log1p(spread + 2 * p_spread + bool(estimate.get("disputed")))
         return value, score
 
     metrics_by_index = {i: metrics(i) for i in items}

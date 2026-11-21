@@ -208,42 +208,6 @@ Modell-/Promptstände können im Fenster enthalten sein. Dies ist eine rückblic
 bei unveränderten Gegnerabgaben, keine unabhängige Prognose und keine automatische
 Änderung von A_MULT oder SIGMA. Der vorhandene validierte Kalibrierungsweg bleibt separat.
 
-### Preisaufstellung und unabhängige Nachprüfung
-
-Modellantworten enthalten jetzt `valuation`: Kategorie, Komponenten (Menge × Brutto-Einzelpreis),
-`covered_share` und getrennte Begründungen für Anteil und Deckung. Der bereits anteilig
-berechnete Betrag bleibt `t_if_covered`; `covered_prob` ist ausschließlich die Unsicherheit
-über Deckung/Schadenbezug. Die Preisbildung multipliziert den Anteil nicht nochmals.
-Unvereinbare Aufstellungen (>0,5 % bzw. mindestens 0,02 EUR Abweichung) werden als ungültige
-Stimme verworfen; alte Stimmen ohne diese Zusatzdaten bleiben lesbar. Eine rechnerisch
-konsistente Aufstellung belegt noch keinen korrekten Marktpreis.
-
-Wiederholte Stimmen derselben Stufe bekommen keinen Bonus allein für ihre Anzahl. Ein
-Preiswechsel um mehr als Faktor 1,15 gegenüber der aktuell bestätigten Schätzung braucht
-eine unabhängige Focus-Nachprüfung mit konsistenter Aufstellung. Dies ist eine neue,
-noch nicht live validierte Schutzheuristik: Sie kann auch eine richtige spätere Korrektur
-zurückhalten, wenn keine ausreichende Nachprüfung gelingt. Bei Zeitmangel bleibt die
-bestätigte Abgabe erhalten. Kleine Änderungen nutzen weiterhin den bisherigen Stufenvergleich.
-
-Focus erhält Originalunterlagen und die vollständige Rechnung als Kontext, aber keine
-vorherigen Modellpreise, Begründungen oder historischen Preisbereiche. Nur ausgewählte
-Positionen werden zurückgegeben. Unterschiede zwischen Stufen helfen bei deren Auswahl;
-Limits für gemeinsame Positionen bleiben atomar. Anzahl der Focus-Aufrufe und Zeitbudget
-werden nicht erhöht, Antworten können durch die Aufstellung allerdings länger werden.
-`view_rounds.py --game N` zeigt Auswahlgrund und Rechenprüfung; rohe Aufstellungen stehen
-bei den Stimmen in `out/rounds.jsonl`.
-
-Der Lernbericht ergänzt deskriptive Preisfehler nach Kategorie (nur neu protokollierte,
-zuordenbare, gedeckte und nicht durch Betragsanker/Limits veränderte Positionen). Daraus
-werden noch keine automatischen Gruppenfaktoren aktiviert. Außerdem zeigt die Grid-Auswertung
-einen historischen chronologischen Test: mindestens fünf frühere auswertbare Spiele wählen
-ein Paar aus dem festen Raster, erst das nächste auswertbare Spiel prüft es. Spätere Ergebnisse
-und künftig verwendete zusätzliche Parameterpaare beeinflussen diese Wahl nicht. Dieses
-Prüfergebnis ersetzt nicht die Top-10-Rangliste und ändert keine Live-Parameter. Alle Vergleiche
-halten damalige Schätzungen und Gegnerabgaben fest; Promptwechsel und breite Preisintervalle
-begrenzen die Aussagekraft. Prompt-/Konfigurationskennungen ändern sich mit dieser Version,
-sodass frühere Kalibrierungen nicht ungeprüft auf die neue Bewertungslogik übertragen werden.
-
 ### Rechenzeit zwischen den Runden: Preis-Schätzervergleich für m
 
 Jeder erfolgreiche Lern-Neuaufbau untersucht zusätzlich unter `m_research` acht Verfahren:

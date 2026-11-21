@@ -86,10 +86,6 @@ def show(rec, team, brief, fetch):
             a_b = f"a {ab[0]:.2f} b {ab[1]:.2f}" if ab and ab[0] is not None else ""
             extra = "".join(f" {k} {e[k]:.0f}" for k in ("stated", "cap", "shared") if e.get(k))
             print(f"      {name:<4} p {e['p']:.2f} [{ps}]  m {e['m']:.0f}{raw} [{votes}]{extra}  {a_b}")
-            if e.get("selection"):
-                print(f"           selection: {e['selection']}")
-            if e.get("valuation_audits"):
-                print(f"           valuation ({e.get('valuation_category')}): {e['valuation_audits']}")
             clause = e.get("clause") or next((c for c in e.get("clauses") or [] if c), "")
             if clause:
                 print(f"           {str(clause)[:160]}")
