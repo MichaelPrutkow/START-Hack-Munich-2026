@@ -560,7 +560,7 @@ def play_game(gid, start, dry=False, use_llm=True):
 
     rules = {i: (floor_c(v), ceil_c(v)) for i, v in fb.items()}
     best = {"level": 0, "ab": rules, "tier": "rules"}
-    out, usage, slock = {"rules": rules}, {}, threading.Lock()
+    out, usage, slock, est = {"rules": rules}, {}, threading.Lock(), {}
 
     def run_tier(tier, msgs):
         try:
@@ -570,7 +570,10 @@ def play_game(gid, start, dry=False, use_llm=True):
             for i in items:
                 votes = [v[i] for v in voices if i in v]
                 if votes:
-                    part[i] = price(*aggregate(votes), fb[i])
+                    agg = aggregate(votes)
+                    est.setdefault(tier.name, {})[i] = {"p": round(agg[0], 3), "m": round(agg[1], 2),
+                                                        "stated": agg[2], "cap": agg[3]}
+                    part[i] = price(*agg, fb[i])
             out[tier.name] = part
             with slock:                             # ordered: a slower lower tier never overwrites
                 if tier.level < best["level"]:
@@ -598,7 +601,8 @@ def play_game(gid, start, dry=False, use_llm=True):
     final = best["ab"]
     rec = {"game": gid, "lines": len(items), "winner": best["tier"], "ok": prov_ok or best["level"] > 0,
            "t_provisional": round(t_prov, 2), "t_end": round(time.time() - t_key, 2), "usage": usage,
-           "models": {t.name: t.model for t in TIERS}, "items": items, "tiers": out}
+           "models": {t.name: t.model for t in TIERS}, "items": items, "tiers": out,
+           "est": est, "a_mult": A_MULT, "sigma": SIGMA}
     jlog("rounds.jsonl", rec)
     log.info("[%s] DONE winner %s, sum a %.0f", gid, best["tier"], sum(a for a, _ in final.values()))
     return rec
