@@ -340,10 +340,11 @@ class Tier:
 
 def build_tiers():
     env = os.environ.get
-    tiers = [Tier("fast", 1, env("FAST_MODEL") or env("OPENAI_MODEL") or "gpt-5.4-mini",
-                  env("FAST_REASONING", "low"), int(env("FAST_VOTES", "3")), float(env("FAST_BUDGET", "20")))]
-    if env("DEEP_MODEL", "gpt-5.4").lower() != "off":
-        tiers.append(Tier("deep", 2, env("DEEP_MODEL", "gpt-5.4"), env("DEEP_REASONING", "high"),
+    # defaults measured 21.11. on a 47k-char policy with 35 lines:
+    # gpt-5.6-terra none n=3: 9.6 s; gpt-6.2-astra high: 19.8 s; gpt-6.2-sol high: > 20 s
+    tiers = [Tier("fast", 1, env("FAST_MODEL", "gpt-5.6-terra"), env("FAST_REASONING", "none"), int(env("FAST_VOTES", "3")), float(env("FAST_BUDGET", "20")))]
+    if env("DEEP_MODEL", "gpt-6.2-astra").lower() != "off":
+        tiers.append(Tier("deep", 2, env("DEEP_MODEL", "gpt-6.2-astra"), env("DEEP_REASONING", "high"),
                           int(env("DEEP_VOTES", "1")), float(env("DEEP_BUDGET", "50"))))
     return tiers
 
@@ -351,7 +352,7 @@ def build_tiers():
 TIERS = []
 
 
-def llm_call(messages, n, tier):
+def llm_call(messages, n, tier, timeout=20.0):
     import openai
     while True:
         name = POOL.current()
@@ -359,7 +360,7 @@ def llm_call(messages, n, tier):
             raise NoKeys()
         try:
             return POOL.client(name).chat.completions.create(
-                model=tier.model, messages=messages, n=n, **tier.extra,
+                model=tier.model, messages=messages, **({"n": n} if n > 1 else {}), **tier.extra, timeout=max(3.0, timeout),
                 response_format={"type": "json_schema",
                                  "json_schema": {"name": "line_items", "strict": True, "schema": SCHEMA}})
         except openai.AuthenticationError:
@@ -435,7 +436,7 @@ def assess(messages, timeout, tier):
     ex = ThreadPoolExecutor(tier.votes)          # no `with`: never block on a hanging call
     try:
         if tier.n_ok or tier.votes == 1:
-            fut = ex.submit(llm_call, messages, tier.votes, tier)
+            fut = ex.submit(llm_call, messages, tier.votes, tier, timeout)
             done, _ = wait([fut], timeout=timeout)
             if fut in done and fut.exception() is None:
                 return add(fut.result()), usage
@@ -443,7 +444,7 @@ def assess(messages, timeout, tier):
                 raise NoKeys()
             if fut not in done or tier.n_ok:       # timeout or other error: give up
                 raise RuntimeError(f"LLM failed: {type(fut.exception()).__name__ if fut in done else 'timeout'}")
-        futs = [ex.submit(llm_call, messages, 1, tier) for _ in range(tier.votes)]
+        futs = [ex.submit(llm_call, messages, 1, tier, timeout) for _ in range(tier.votes)]
         done, _ = wait(futs, timeout=timeout)
         votes = []
         for f in done:
