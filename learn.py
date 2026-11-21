@@ -46,6 +46,7 @@ def show_state(state):
     validated = sum(c["status"] == "validated" for c in state["calibrations"])
     print(f"Learning: {len(state['games'])} reconciled games, {state['summary']['lines']} lines, "
           f"{len(state['excluded'])} excluded; {validated} validated calibrations.")
+    print("Price groups (diagnostic only):", state.get("group_price_diagnostics", {}))
     print("Training data:", state.get("learning_counts", {}))
     print("Training exclusions:", dict(Counter(x["reason"] for x in state.get("training_exclusions", []))))
     from claim_to_fame.decision_review import summarize

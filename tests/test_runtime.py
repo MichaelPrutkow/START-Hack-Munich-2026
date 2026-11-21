@@ -205,14 +205,14 @@ class RuntimeTests(unittest.TestCase):
                 self.assertTrue(fast_sent.wait(2))
             amounts = [100, 100, 100] if tier.name == "fast" else [80, 200, 700]
             return [{1: {"covered_prob": 1, "t_if_covered": m},
-                     4: {"covered_prob": 1, "t_if_covered": 50 if tier.name == "fast" else 60}}
+                     4: {"covered_prob": 1, "t_if_covered": 50 if tier.name == "fast" else 55}}
                     for m in amounts], {}
         self.enterContext(patch.object(R, "assess", side_effect=assess))
         rec = R.play_game(1, time.time(), dry=True)
         self.assertEqual(rec["line_sources"], {1: "fast", 4: "deep"})
         self.assertEqual(rec["final_ab"], self.sent[-1][1])
         self.assertEqual(rec["final_ab"][1][0], 85)
-        self.assertEqual(rec["final_ab"][4][0], 51)
+        self.assertEqual(rec["final_ab"][4][0], 46.75)
         self.assertGreater(rec["est"]["deep"][1]["log_spread"], 0)
         self.assertTrue(rec["dry"])
         self.assertEqual(rec["campaign"], "2026-11")
@@ -240,13 +240,17 @@ class RuntimeTests(unittest.TestCase):
             if tier.name == "deep":
                 return [{1: {"covered_prob": 1, "t_if_covered": 500},
                          4: {"covered_prob": 1, "t_if_covered": 60}} for _ in range(3)], {}
-            return [{1: {"covered_prob": 1, "t_if_covered": 400}} for _ in range(2)], {}
+            value = {"covered_prob": 1, "t_if_covered": 400, "valuation": {
+                "category": "labour", "components": [{"label": "estimated labour", "quantity": 4, "unit_gross": 100}],
+                "covered_share": 1, "share_basis": "fully attributable", "coverage_basis": "covered repair"}}
+            return [{1: value} for _ in range(2)], {}
         self.enterContext(patch.object(R, "assess", side_effect=assess))
         rec = R.play_game(1, time.time(), dry=True)
         self.assertEqual([c[0] for c in calls], ["deep", "focus"])
         self.assertLessEqual(calls[1][1], 12)
         self.assertIn("1 | Synthetic repair", calls[1][2][1]["content"])
-        self.assertNotIn("4 | Synthetic part", calls[1][2][1]["content"])
+        self.assertIn("4 | Synthetic part", calls[1][2][1]["content"])
+        self.assertIn("and no others: 1.", calls[1][2][1]["content"])
         self.assertEqual(rec["line_sources"], {1: "focus", 4: "deep"})
         self.assertEqual(rec["final_ab"][4], rec["tiers"]["deep"][4])
 

@@ -518,7 +518,9 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
         except (OSError, ValueError, TypeError, KeyError):
             continue
     grid = evaluate(prepared_grid, window, team, checkpoint)
-    return {"parameter_grid": grid, "schema_version": SCHEMA_VERSION, "algorithm": ALGORITHM,
+    from .decision_review import group_diagnostics
+    grouped = group_diagnostics(reports)
+    return {"group_price_diagnostics": grouped, "parameter_grid": grid, "schema_version": SCHEMA_VERSION, "algorithm": ALGORITHM,
             "controls": {**CONTROLS, "a_mult_grid": list(A_MULT_GRID)},
             "campaign": CAMPAIGN, "team": team,
             "created_at": created.isoformat(), "max_game": max((g["game"] for g in reports), default=0),
@@ -951,6 +953,10 @@ def render_report(state):
         lines.append(f"- Excluded {excluded.get('game', 'record ' + str(excluded.get('record')))}: {excluded['reason']}")
     from .parameter_grid import report
     lines += report(state.get("parameter_grid"))
+    lines += ['', 'Price estimates by category (descriptive, confirmed-covered uncapped lines only; no automatic correction):']
+    for category, stats in state.get('group_price_diagnostics', {}).items():
+        lines.append(f"- {category}: {stats['lines']} lines, games {stats['games']}; median fair/estimate "
+                     f"{stats['median_fair_to_estimate_lower']}..{stats['median_fair_to_estimate_upper']}")
     return "\n".join(lines) + "\n"
 
 

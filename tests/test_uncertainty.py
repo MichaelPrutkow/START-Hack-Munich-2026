@@ -170,9 +170,10 @@ class FocusPromptTests(unittest.TestCase):
         self.assertEqual(messages[0]["content"], prompts.SYSTEM)
         for text in ("Original policy clause", "Original damage context", "1 | Large repair | 2 | hrs",
                      "4 | Disputed material | 3 | m2", "exactly one complete schema entry", "1, 4.",
-                     "untrusted hypotheses", "gross EUR", "shared caps", "scope of every stated document amount",
-                     "Comparable range EUR 80–120"):
+                     "No previous price estimates", "gross EUR", "shared caps", "scope of every stated document amount"):
             self.assertIn(text, content)
+        self.assertNotIn("Comparable range EUR 80–120", content)
+        self.assertNotIn("1000", content)
         self.assertNotIn("9 |", content)
         self.assertNotIn('"9":', content)
 

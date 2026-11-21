@@ -16,7 +16,8 @@ def review_line(inference, transactions, team, final, estimate, control, index):
     lo, hi = inference["t"]
     m = estimate.get("m_raw", estimate.get("m"))
     p = estimate.get("p")
-    diagnostic = {"m_raw": m if _number(m) else None, "covered_prob": p if _number(p) else None,
+    diagnostic = {"valuation_category": estimate.get("valuation_category", "unknown"),
+                  "m_raw": m if _number(m) else None, "covered_prob": p if _number(p) else None,
                   "estimate_position": "unavailable", "variants": {}}
     if _number(m) and m > 0:
         diagnostic["estimate_position"] = ("policy_adjusted" if any(estimate.get(k) is not None for k in ("cap", "shared", "stated")) else
@@ -72,3 +73,25 @@ def summarize(reports):
                         "without_best_game_lower": sum(v["lower"] for g, v in games.items() if g != best),
                         "best_game": best}
     return result
+
+
+def group_diagnostics(reports):
+    """Descriptive conditional-price errors by new logged category; never apply bias."""
+    import statistics
+    groups = {}
+    for game in reports:
+        for row in game['lines']:
+            d = row.get('decision_review', {})
+            group = d.get('valuation_category', 'unknown')
+            if group == 'unknown' or d.get('estimate_position') in ('unavailable', 'policy_adjusted', 'no_positive_fair_evidence'):
+                continue
+            m = d.get('m_raw')
+            if not _number(m) or m <= 0 or row['t'][0] <= 0:
+                continue
+            groups.setdefault(group, []).append((row['t'][0]/m,
+                row['t'][1]/m if row['t'][1] is not None else math.inf, game['game']))
+    return {category: {'lines': len(values), 'games': sorted({v[2] for v in values}),
+                      'median_fair_to_estimate_lower': round(statistics.median(v[0] for v in values), 4),
+                      'median_fair_to_estimate_upper': (round(statistics.median(v[1] for v in values), 4)
+                          if math.isfinite(statistics.median(v[1] for v in values)) else None),
+                      'activation': 'none'} for category, values in groups.items()}

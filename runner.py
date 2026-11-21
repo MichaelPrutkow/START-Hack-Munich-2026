@@ -557,7 +557,12 @@ def strategy_identity():
     """Stable per-estimator identity; changing prices/logging does not erase evidence."""
     def code(fn):
         return digest(ast.dump(ast.parse(inspect.getsource(fn)), include_attributes=False))
-    common = {"aggregation": code(pricing.estimate_votes), "number_validation": code(pricing._number),
+    from claim_to_fame import assessment
+    common = {"assessment_audit": code(assessment.audit), "assessment_number": code(assessment.number),
+              "selection_policy": code(assessment.selection), "selection_wrapper": code(selection_decision),
+              "disagreement": code(assessment.disagreement), "valuation_categories": assessment.CATEGORIES,
+              "max_unreviewed_ratio": assessment.MAX_UNREVIEWED_RATIO,
+              "aggregation": code(pricing.estimate_votes), "number_validation": code(pricing._number),
               "shared_caps": code(apply_shared_caps),
               "selection": code(prefer_estimate), "quality": code(estimate_quality),
               "disagree": DISAGREE}
@@ -589,20 +594,18 @@ def estimate_quality(estimate):
     spread = estimate.get("log_spread", 0.0) + estimate.get("p_spread", 0.0)
     anchors = sum(bool(a.get("conflicting") or a.get("invalid"))
                   for a in estimate.get("anchor_validity", {}).values())
-    return spread + invalid + 0.25 * anchors + 0.12 / math.sqrt(n)
+    return spread + invalid + 0.25 * anchors
+
+
+def selection_decision(candidate, previous, *, level, previous_level):
+    from claim_to_fame import assessment
+    return assessment.selection(candidate, previous, level=level, previous_level=previous_level,
+                                new_quality=estimate_quality(candidate),
+                                old_quality=estimate_quality(previous) if previous else 0)
 
 
 def prefer_estimate(candidate, previous, *, level, previous_level):
-    if not candidate.get("valid_count", 0):
-        return False
-    if previous is None:
-        return True
-    new_q, old_q = estimate_quality(candidate), estimate_quality(previous)
-    # A larger model gets only a tie break, not the right to replace a much
-    # more consistent result. A single focused vote cannot look perfectly certain.
-    if level > previous_level:
-        return new_q <= old_q + 0.15
-    return new_q + 0.15 < old_q
+    return selection_decision(candidate, previous, level=level, previous_level=previous_level)[0]
 
 
 def atomic_selection(selected, *versions):
@@ -724,6 +727,7 @@ def play_game(gid, start, dry=False, use_llm=True):
                       "stated": stated, "stated_raw": summary["stated"], "cap": cap,
                       "cap_raw": summary["cap"],
                       "calibration_applied": bool(eligible), "bias": bias, "sigma": sigma, "a_mult": alpha,
+                      "independent_recheck": tier.name == "focus",
                       "uncertainty_applied": os.environ.get("PRICING_UNCERTAINTY", "0") == "1"}
             part[i] = price(p, m, stated, cap, fb[i], uncertainty=summary["log_spread"],
                             bias=bias, sigma=sigma, a_mult=alpha)
@@ -739,16 +743,27 @@ def play_game(gid, start, dry=False, use_llm=True):
             out[tier.name], est[tier.name], usage[tier.name] = part, details, used
             vote_log[tier.name] = voices
             log_prices(gid, tier.name, items, part, details)
-            selected = [i for i in part if prefer_estimate(details[i], best["est"].get(i),
-                         level=tier.level, previous_level=best["levels"][i])]
+            decisions = {i: selection_decision(details[i], best["est"].get(i),
+                         level=tier.level, previous_level=best["levels"][i]) for i in part}
+            for i, (accepted, reason) in decisions.items():
+                details[i]["selection"] = {"accepted": accepted, "reason": reason}
+                log.info("[%s] %s line %s selection: %s", gid, tier.name, i, reason)
+            selected = [i for i in part if decisions[i][0]]
             # A shared-cap group is an atomic decision: never mix two allocations.
             selected = atomic_selection(selected, best["est"], details)
+            for i in part:
+                if decisions[i][0] and i not in selected:
+                    details[i]["selection"] = {"accepted": False, "reason": "shared_group_retained"}
             if not selected:
                 log.info("[%s] %s kept for evaluation; current estimates retained", gid, tier.name)
                 return False
             merged = {**best["ab"], **{i: part[i] for i in selected}}
             if not submit(gid, merged, deadline, dry, tier.name):
+                for i in selected:
+                    details[i]["selection"]["submitted"] = False
                 return False
+            for i in selected:
+                details[i]["selection"]["submitted"] = True
             confirmed.append(tier.name)
             best["ab"], best["tier"] = merged, tier.name
             for i in selected:
@@ -773,8 +788,17 @@ def play_game(gid, start, dry=False, use_llm=True):
             budget = min(float(os.environ.get("FOCUS_BUDGET", "12")), deadline - time.time() - 5)
             if budget < 8:
                 return
+            from claim_to_fame import assessment
+            with slock:
+                comparisons = [{i: dict(e) for i, e in entries.items()} for entries in est.values()]
+            focus_estimates = {i: dict(e) for i, e in details.items()}
+            for i, e in focus_estimates.items():
+                differences = [assessment.disagreement(e, entries.get(i)) for entries in comparisons]
+                e["p"] = max([e.get("p", 0)] + [entries[i].get("p", 0) for entries in comparisons if i in entries])
+                e["cross_stage_log_range"] = max((math.log(r) for r, _ in differences), default=0)
+                e["disputed"] = e.get("disputed", False) or any(r > assessment.MAX_UNREVIEWED_RATIO or p > .2 for r, p in differences)
             focused_items = pricing.select_focus_items(
-                {i: items[i] for i in details if details[i].get("shared") is None}, details,
+                {i: items[i] for i in details if details[i].get("shared") is None}, focus_estimates,
                 limit=int(os.environ.get("FOCUS_MAX_LINES", "2")))
             # Reassess shared groups only with full-case calls, never partial caps.
             if not focused_items:
@@ -782,7 +806,7 @@ def play_game(gid, start, dry=False, use_llm=True):
             focused = Tier("focus", tier.level + 0.5, tier.model, tier.extra.get("reasoning_effort"), 2, budget)
             focused.n_ok = tier.n_ok                    # same model: never re-probe a refused n>1
             stage = focused.name
-            fm = build_focus_prompt(policy, desc, focused_items, details, historical_context=history)
+            fm = build_focus_prompt(policy, desc, focused_items, focus_estimates, all_items=items)
             fv, fu = assess(fm, budget, focused)
             fp, fe = candidate(focused, fv, focused_items)
             publish(focused, fp, fe, fv, fu)

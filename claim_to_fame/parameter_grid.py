@@ -130,12 +130,29 @@ def evaluate(prepared, window, team, checkpoint=None):
         best = min((result(pair, [rows[i]]) for pair, rows in scores.items()),
                    key=lambda r: (-r['lower'], r['a_mult'], r['sigma']))
         per_game.append({**game, 'best': best if game['replayed_lines'] else None})
+    # Historical walk-forward: choose on earlier games only, evaluate the next
+    # replayable game. Fixed grid avoids leaking future off-grid runtime pairs.
+    forward = []
+    usable_indices = [i for i, g in enumerate(game_info) if g['replayed_lines'] > 0]
+    for offset in range(5, len(usable_indices)):
+        if checkpoint:
+            checkpoint()
+        previous, target = usable_indices[:offset], usable_indices[offset]
+        pair = min(((a, s) for a in ALPHAS for s in SIGMAS),
+                   key=lambda p: (-math.fsum(scores[p][j]['lower'] for j in previous), p))
+        forward.append({'game': game_info[target]['game'],
+                        'train_games': [game_info[j]['game'] for j in previous],
+                        **result(pair, [scores[pair][target]])})
+    walk_forward = {'minimum_train_games': 5, 'status': 'historical_holdout' if forward else 'insufficient_games',
+                    'games': forward, 'delta_lower': round(sum(g['delta_lower'] for g in forward), 2),
+                    'delta_upper': (round(sum(g['delta_upper'] for g in forward), 2)
+                                    if all(g['delta_upper'] is not None for g in forward) else None)}
     return {'status': 'retrospective_only' if usable else 'no_replayable_estimates',
             'window_size': WINDOW_SIZE, 'window_games': window, 'missing_games': sorted(set(window)-{g['game'] for g in game_info}),
             'replayed_lines': sum(g['replayed_lines'] for g in game_info),
             'fixed_lines': sum(g['fixed_lines'] for g in game_info),
             'combination_count': len(scores), 'best': ranked[0] if usable else None,
-            'detailed_games_top_n': 10, 'ranking': ranked, 'per_game': per_game, 'exclusions': exclusions}
+            'walk_forward': walk_forward, 'detailed_games_top_n': 10, 'ranking': ranked, 'per_game': per_game, 'exclusions': exclusions}
 
 
 def report(grid):
@@ -155,6 +172,14 @@ def report(grid):
         for row in grid['ranking'][:10]:
             lines.append(f"| {row['a_mult']} | {row['sigma']} | {row['lower']}..{row['upper']} | "
                          f"{row['delta_lower']}..{row['delta_upper']} | {row['without_best_game_delta_lower']} |")
+    forward = grid.get('walk_forward')
+    if forward:
+        lines += ['', f"Chronological check: {forward['status']}; {len(forward['games'])} later games; "
+                  f"delta vs actual {forward['delta_lower']}..{forward['delta_upper']} EUR.",
+                  'Each pair was selected using at least five earlier replayable games only. Historical test, not live validation.']
+        for row in forward['games']:
+            lines.append(f"- Check game {row['game']}: train {row['train_games']}; A_MULT {row['a_mult']}, "
+                         f"SIGMA {row['sigma']}; delta {row['delta_lower']}..{row['delta_upper']}")
     for game in grid['per_game']:
         lines.append(f"- Game {game['game']}: actual {game['actual']}; best conservative combination: {game['best']}; "
                      f"fixed lines: {game['fixed_reasons']}")

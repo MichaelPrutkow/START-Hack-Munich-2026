@@ -120,6 +120,21 @@ class GridTests(unittest.TestCase):
         self.assertLess(a, 85)
         self.assertEqual(b, 0)
 
+    def test_walk_forward_does_not_select_using_test_game_or_future_pairs(self):
+        past = [self.prepared(i) for i in range(1, 6)]
+        first = self.prepared(6)
+        changed = self.prepared(6, m=200)
+        changed[0]['est']['unused'] = {'1': {'a_mult': .855, 'sigma': .345}}
+        with patch.object(G, 'ALPHAS', (.75, 1.)), patch.object(G, 'SIGMAS', (.35, .8)):
+            a = G.evaluate([*past, first], range(1, 7), 'us')['walk_forward']
+            b = G.evaluate([*past, changed], range(1, 7), 'us')['walk_forward']
+        self.assertEqual(len(a['games']), 1)
+        self.assertEqual(a['games'][0]['train_games'], [1, 2, 3, 4, 5])
+        self.assertEqual(a['games'][0]['game'], 6)
+        for key in ('a_mult', 'sigma'):
+            self.assertEqual(a['games'][0][key], b['games'][0][key])
+        self.assertNotEqual(a['games'][0]['lower'], b['games'][0]['lower'])
+
     def test_missing_recall_evidence_is_not_reconstructed(self):
         row = self.prepared()
         row[0]['est']['fast']['1']['recall_applied'] = True
