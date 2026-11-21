@@ -107,6 +107,49 @@ class RecallUnitTests(unittest.TestCase):
         self.assertEqual(recall.apply_cap((400.0, 0.0), loose, {"stated": None}, "loose"), (291.0, 0.0))
 
 
+class RecallHiCapTests(unittest.TestCase):
+    """Mode "2": 0.95 x the recalled unfair level caps a and b, one- or two-sided."""
+
+    def test_hi_cap_value(self):
+        self.assertEqual(recall.hi_cap_from(300.0), 285.0)
+        self.assertIsNone(recall.hi_cap_from(math.inf))
+        self.assertIsNone(recall.hi_cap_from(0.0))
+
+    def test_mode_2_caps_a_and_b_only_downwards(self):
+        entry = {"cap": None, "cap_loose": None, "cap_hi": 285.0, "t": [0.0, 300.0]}
+        detail = {"stated": None}
+        self.assertEqual(recall.apply_cap((400.0, 390.0), entry, detail, "2"), (285.0, 285.0))
+        self.assertTrue(detail["recall_applied"] and detail["recall_b_applied"])
+        self.assertEqual((detail["a_before_recall"], detail["b_before_recall"]), (400.0, 390.0))
+        detail = {"stated": None}
+        self.assertEqual(recall.apply_cap((200.0, 250.0), entry, detail, "2"), (200.0, 250.0))
+        self.assertFalse(detail["recall_applied"] or detail["recall_b_applied"])
+        self.assertEqual(recall.apply_cap((400.0, 0.0), entry, {"stated": None}, "2"), (285.0, 0.0))
+
+    def test_mode_2_respects_stated_amounts_and_missing_level(self):
+        entry = {"cap": None, "cap_loose": None, "cap_hi": 285.0, "t": [0.0, 300.0]}
+        self.assertEqual(recall.apply_cap((400.0, 390.0), entry, {"stated": 400.0}, "2"), (400.0, 390.0))
+        none = {"cap": None, "cap_loose": None, "cap_hi": None, "t": [500.0, None]}
+        self.assertEqual(recall.apply_cap((400.0, 390.0), none, {"stated": None}, "2"), (400.0, 390.0))
+
+    def test_other_modes_never_touch_b(self):
+        entry = {"cap": 500.0, "cap_loose": 520.0, "cap_hi": 522.5, "t": [450.0, 550.0]}
+        for mode in ("1", "loose", "shadow", "0"):
+            self.assertEqual(recall.apply_cap((600.0, 700.0), entry, {"stated": None}, mode)[1], 700.0)
+
+    def test_caps_for_reports_hi_cap(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            recall._CACHE.clear()
+            with patch.object(recall, "parse_items", side_effect=fake_parse):
+                write_game(root, 3, "P", {"1": {"description": "TV set", "quantity": 1, "unit": "pcs"}},
+                           tv_transactions())
+                caps = recall.caps_for(4, {1: {"description": "TV set", "quantity": 1, "unit": "pcs"}}, "P",
+                                       root / "cases", root / "leaderboard", "us")
+        self.assertEqual(caps[1]["cap_hi"], 617.5)
+        self.assertEqual(caps[1]["cap"], 625.0)
+
+
 class RecallRuntimeTests(test_runtime.RuntimeTests):
     """play_game applies the cap only with RECALL_CAP=1 and always records the evidence."""
 
@@ -126,6 +169,19 @@ class RecallRuntimeTests(test_runtime.RuntimeTests):
         self.assertEqual(rec["final_ab"][4], R.price(1, 100, None, None, 60))
         self.assertTrue(rec["est"]["fast"][1]["recall_applied"])
         self.assertEqual(rec["recall"]["mode"], "1")
+
+    def test_mode_2_caps_charge_and_limit(self):
+        self.prepare_round([R.Tier("fast", 1, "fake", None, 1, 20)])
+        caps = {1: {"cap": 50.0, "cap_loose": None, "cap_hi": 57.0, "t": [40.0, 60.0],
+                    "matches": [{"game": 1, "line": 1}]}}
+        self.enterContext(patch.object(R.recall_mod, "caps_for", return_value=caps))
+        self.enterContext(patch.object(R, "recall_setting", return_value="2"))
+        votes = [{1: {"covered_prob": 1, "t_if_covered": 100}, 4: {"covered_prob": 1, "t_if_covered": 100}}]
+        self.enterContext(patch.object(R, "assess", return_value=(votes, {})))
+        rec = R.play_game(2, time.time(), dry=True)
+        self.assertEqual(rec["final_ab"][1], (57.0, 57.0))
+        self.assertEqual(rec["final_ab"][4], R.price(1, 100, None, None, 60))
+        self.assertTrue(rec["est"]["fast"][1]["recall_b_applied"])
 
     def test_shadow_mode_only_records(self):
         rec = self.run_with_mode("shadow")
@@ -148,11 +204,13 @@ class RecallRuntimeTests(test_runtime.RuntimeTests):
             env = Path(d) / ".env"
             self.enterContext(patch.object(R, "ENV_PATH", env))
             os.environ.pop("RECALL_CAP", None)          # setUp's patch.dict restores the environment
-            self.assertEqual(R.recall_setting(), "shadow")
+            self.assertEqual(R.recall_setting(), "2")
             env.write_text("RECALL_CAP=1\n")
             self.assertEqual(R.recall_setting(), "1")
-            env.write_text("RECALL_CAP=nonsense\n")
+            env.write_text("RECALL_CAP=shadow\n")
             self.assertEqual(R.recall_setting(), "shadow")
+            env.write_text("RECALL_CAP=nonsense\n")
+            self.assertEqual(R.recall_setting(), "2")
 
 
 # The inherited RuntimeTests methods already run in test_runtime; run only the recall ones here.

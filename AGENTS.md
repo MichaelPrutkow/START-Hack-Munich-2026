@@ -78,6 +78,7 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 21 | Recall-Deckel für a aus eigenen abgerechneten Spielen (Schatten/live per `.env`) | [C] | review | `claim_to_fame/recall.py`, `runner.py`, `tests/test_recall.py`, `.env.example`, `README.md`, `notes/DECISIONS.md` |
 | 22 | Spiel 19: Deep-Ausfall und Nettobilanz nachvollziehen | [X] | fertig | `AGENTS.md` |
 | 23 | Deep-Zeitbudget, Fehlerdiagnose und lokales Latenzprofil | [X] | fertig | `runner.py`, `tests/test_runtime.py`, `.env`, `.env.example`, `README.md`, `AGENTS.md` |
+| 24 | Handanalyse G1–18, Recall-Modus 2 (a und b), Prompt-Hinweise | [C] | in Arbeit | `claim_to_fame/recall.py`, `runner.py`, `tests/test_recall.py`, `claim_to_fame/prompts.py`, `.env.example`, `README.md`, `notes/DECISIONS.md` |
 
 ## Offene Fragen
 
@@ -303,3 +304,10 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 
 - Spiel 20: Die fünf Regeln-Positionen wurden per HTTP 200 und Echo bestätigt. Danach scheiterte `strategy_identity()`, bevor Fast und Deep gestartet wurden. Die Änderung von `runner.py` während des alten Prozesses war die Ursache. Exakt offline reproduziert: `77ff9a6` im Speicher, `7920181` auf Platte → `ast.parse` sieht `timeout=5).stdout.strip()` und meldet `IndentationError`. Beide Versionen funktionieren mit jeweils passender Quelldatei.
 - Der um 18:16:21 gestartete Prozess 45249 hält den Runner-Lock. `strategy_identity()` auf aktuellem Code und 21 Offline-Runner-Tests erfolgreich. Erste vollständige Runde seit Neustart stand beim Check noch aus. Die um 18:16:09 zuletzt bearbeitete `.env` ergibt bei frischem Start wieder `high` mit drei Stimmen. Keine Einstellungen geändert. Runner-Code künftig im separaten Checkout vorbereiten und erst nach Stopp im Live-Checkout ändern.
+
+### 21.11.2026 18:45 · Claude · Handanalyse G1–18 und Recall-Modus 2
+
+- Alle 18 Fälle (Philips entpackte Fälle) von Hand gegen Police und t-Spannen geprüft. Bericht mit Falldaten gitignored unter `out/audit/HANDANALYSE_G1-18.md` auf Michaels Mac. Kern: Deckung in 98 von 100 Zeilen richtig, ~85 % der Lücke ist der Marktpreis m. Größte Zeile nur 7/18 fair (404 12/18, FDN 13/15).
+- `RECALL_CAP=2` (neuer Default): `a` **und** `b` höchstens 0,95 × niedrigste zurückgerufene unfaire Forderung (`cap_hi`), ein- oder zweiseitig, nie anheben, Zeilen mit Dokumentbetrag ausgenommen. Nachrechnung G1–18 mit echtem `recall.py`-Matching, A_MULT 0,68, `score_submission`: ohne Recall Mitte 26,3k, alter Modus 1 26,6k, Modus 2 31,2k [21,2k; 41,2k]; G1–10 und G11–18 beide besser. Erfasst u. a. G10-Sammelzeile aus G8, G17-Diagnose/Anfahrt aus G1/G15 (t≈0).
+- `SIGMA` bewusst nicht geändert: b = 0,6 m war in G3–10 besser, in G11–18 schlechter (instabil).
+- Tests: 185 offline ok. **Philip: Runner stoppen, erst dann `git pull --ff-only`, neu starten (Code-Änderung im laufenden Prozess hat G20 gebrochen). In `.env` `RECALL_CAP=2` setzen oder die Zeile löschen.**

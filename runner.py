@@ -480,12 +480,13 @@ def read_env(path):
 
 
 def recall_setting():
-    """RECALL_CAP from .env each game: '1' two-sided caps, 'loose' also one-sided, 'shadow' (default) logs, '0' off."""
+    """RECALL_CAP from .env each game: '2' (default) caps a and b at 0.95 x recalled unfair level,
+    '1' two-sided midpoint caps on a, 'loose' also one-sided, 'shadow' logs, '0' off."""
     try:
-        mode = read_env(ENV_PATH).get("RECALL_CAP", os.environ.get("RECALL_CAP", "shadow")).strip().lower()
+        mode = read_env(ENV_PATH).get("RECALL_CAP", os.environ.get("RECALL_CAP", "2")).strip().lower()
     except Exception:
-        mode = "shadow"
-    return mode if mode in ("0", "1", "loose", "shadow") else "shadow"
+        mode = "2"
+    return mode if mode in ("0", "1", "2", "loose", "shadow") else "2"
 
 
 def refresh_settings():
@@ -659,8 +660,9 @@ def play_game(gid, start, dry=False, use_llm=True):
                                               os.environ.get("TEAM_NAME", "chineseModels"))
         except Exception as e:                      # recall is optional; never blocks a round
             log.warning("[%s] recall failed: %s", gid, type(e).__name__)
-    log.info("[%s] recall (%s): %d lines with same-policy evidence, %d with a cap", gid, recall_mode,
-             len(recall_caps), sum(1 for v in recall_caps.values() if v["cap"] is not None))
+    log.info("[%s] recall (%s): %d lines with same-policy evidence, %d with a cap, %d with an unfair level",
+             gid, recall_mode, len(recall_caps), sum(1 for v in recall_caps.values() if v["cap"] is not None),
+             sum(1 for v in recall_caps.values() if v.get("cap_hi") is not None))
     log.info("[%s] learning: %s; completed game %s; recalled context %d chars", gid,
              "available" if state else "no usable artifact; baseline parameters",
              state.get("max_game") if state else "-", len(history))

@@ -23,6 +23,7 @@ from .invoices import norm_unit, parse_items
 from .pricing import floor_c
 
 THETA = 0.3
+HI_FRAC = 0.95      # mode "2": a and b stay below 0.95 x the lowest recalled unfair level
 STOP = set("and the of from for with incl including into in on at to an by per its this that "
            "after before or is are be as".split())
 _CACHE: dict = {}
@@ -121,6 +122,17 @@ def loose_cap_from(lo, hi, minimum=20.0):
     return None
 
 
+def hi_cap_from(hi, frac=HI_FRAC):
+    """Mode "2": a known-unfair level (finite hi), one- or two-sided, caps a AND b.
+
+    Replay G1-18 (score_submission, A_MULT 0.68, opponents fixed): midpoint cap on a only
+    +0.3k, 0.95*hi on a only +1.6k, 0.95*hi on a and b +4.9k; positive in G1-10 and G11-18.
+    """
+    if math.isfinite(hi) and hi > 0:
+        return floor_c(frac * hi)
+    return None
+
+
 def caps_for(gid, items, policy, cases_dir, cache_dir, team, *, theta=THETA):
     """{line: {"cap", "t", "matches"}} for the current game from earlier same-policy games."""
     current = policy_hash(policy)
@@ -135,7 +147,7 @@ def caps_for(gid, items, policy, cases_dir, cache_dir, team, *, theta=THETA):
         if not r:
             continue
         lo, hi, matches = r
-        out[i] = {"cap": cap_from(lo, hi), "cap_loose": loose_cap_from(lo, hi),
+        out[i] = {"cap": cap_from(lo, hi), "cap_loose": loose_cap_from(lo, hi), "cap_hi": hi_cap_from(hi),
                   "t": [round(lo, 2), _finite_or_none(hi)], "matches": matches}
     return out
 
@@ -143,18 +155,27 @@ def caps_for(gid, items, policy, cases_dir, cache_dir, team, *, theta=THETA):
 def apply_cap(ab, entry, detail, mode):
     """Return (a, b) after the recall cap.
 
-    mode '1' applies the two-sided cap, 'loose' also the one-sided one, 'shadow'
-    only records both. Lines priced from a stated document amount stay unchanged.
+    mode '2' caps a and b at 0.95 x the recalled unfair level (one- or two-sided),
+    '1' applies the two-sided midpoint cap to a, 'loose' also the one-sided one, 'shadow'
+    only records. Lines priced from a stated document amount stay unchanged. Never raises a or b.
     """
     a, b = ab
     entry = entry or {}
-    strict, loose = entry.get("cap"), entry.get("cap_loose")
-    cap = strict if strict is not None else (loose if mode == "loose" else None)
-    detail["recall_cap"], detail["recall_cap_loose"] = strict, loose
+    strict, loose, hi_cap = entry.get("cap"), entry.get("cap_loose"), entry.get("cap_hi")
+    detail["recall_cap"], detail["recall_cap_loose"], detail["recall_cap_hi"] = strict, loose, hi_cap
     detail["recall_t"] = entry.get("t")
-    detail["recall_applied"] = bool(cap is not None and mode in ("1", "loose")
-                                    and detail.get("stated") is None and a > cap)
+    if mode == "2":
+        cap, cap_b = hi_cap, hi_cap
+    else:
+        cap = strict if strict is not None else (loose if mode == "loose" else None)
+        cap_b = None
+    free = detail.get("stated") is None
+    detail["recall_applied"] = bool(cap is not None and mode in ("1", "loose", "2") and free and a > cap)
+    detail["recall_b_applied"] = bool(cap_b is not None and free and b > cap_b)
     if detail["recall_applied"]:
         detail["a_before_recall"] = a
-        return cap, b
+        a = cap
+    if detail["recall_b_applied"]:
+        detail["b_before_recall"] = b
+        b = cap_b
     return a, b
