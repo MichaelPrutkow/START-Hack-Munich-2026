@@ -183,15 +183,17 @@ runner between rounds **before pulling**, then restart exactly one instance.
 Die automatische Lernschleife berechnet außerhalb des Spielfensters einen rückblickenden
 Vergleich für die letzten zwanzig vollständig gecachten Spiele. `LEARNING_AUTO` muss aktiviert
 sein; `AUTO_TUNE=0` verhindert diese Auswertung nicht. Keine zusätzlichen LLM-Aufrufe.
-Das Raster enthält A_MULT 0,50–1,10 in 0,05-Schritten und SIGMA
-0,20 / 0,30 / 0,35 / 0,50 / 0,65 / 0,80 / 1,00 / 1,20 / 1,40,
+Das Raster enthält A_MULT 0,50–1,10 und SIGMA 0,20–1,40, jeweils in
+0,01-Schritten (7.381 Kombinationen),
 zusätzlich tatsächlich verwendete Paare. Nach Veröffentlichung der Abrechnung wird es
 beim nächsten erfolgreichen automatischen Refresh aktualisiert; bei Zeitmangel bleibt
 der vorige Bericht erhalten.
 
 `uv run learn.py --status` zeigt die besten Kombinationen und den Sieger je Spiel.
 `out/learning-report.md` enthält die Übersicht; `out/learning.json` unter
-`parameter_grid.ranking` alle Kombinationen mit Einzelrundenergebnissen.
+`parameter_grid.ranking` alle Kombinationen mit Gesamtergebnissen. Einzelrundendetails
+werden für die Top 10 gespeichert, außerdem bleibt der Sieger je Einzelspiel in
+`parameter_grid.per_game` erhalten. So bleibt die Lerndatei auch beim feinen Raster klein.
 Ein sofortiger Offline-Neuaufbau aus vorhandenen Logs und Cache ist mit
 `uv run learn.py` möglich (ohne `--refresh`, keine neuen Modellaufrufe).
 

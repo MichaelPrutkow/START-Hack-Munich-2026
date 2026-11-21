@@ -6,8 +6,8 @@ from .recall import apply_cap
 
 WINDOW_SIZE = 20
 
-ALPHAS = tuple(round(.5 + i * .05, 2) for i in range(13))
-SIGMAS = (.2, .3, .35, .5, .65, .8, 1., 1.2, 1.4)
+ALPHAS = tuple(i / 100 for i in range(50, 111))
+SIGMAS = tuple(i / 100 for i in range(20, 141))
 
 
 def get(mapping, key, default=None):
@@ -41,6 +41,8 @@ def evaluate(prepared, window, team, checkpoint=None):
                 if all(isinstance(x, (int, float)) and math.isfinite(x) and x >= 0 for x in (a, s)):
                     combos.add((a, s))
     scores = {pair: [] for pair in sorted(combos)}
+    alpha_values = sorted({a for a, _ in scores})
+    sigma_values = sorted({s for _, s in scores})
     exclusions, game_info = [], []
     for rec, data, lines, final in selected:
         if checkpoint:
@@ -69,12 +71,22 @@ def evaluate(prepared, window, team, checkpoint=None):
                     total[1] += actual
                 continue
             eligible += 1
-            # Role scores are separable; cache at most 13 + 9 distinct prices per line.
+            # Pricing and historical recall act separately on a and b. Compute
+            # each axis once, then combine the cached role scores for every pair.
             incoming, outgoing = {}, {}
-            for pair, total in totals.items():
+            a_prices, b_prices = {}, {}
+            for alpha in alpha_values:
                 if checkpoint:
                     checkpoint()
-                a, b = replay(rec, line, *pair)
+                a_prices[alpha] = replay(rec, line, alpha, sigma_values[0])[0]
+            for sigma in sigma_values:
+                if checkpoint:
+                    checkpoint()
+                b_prices[sigma] = replay(rec, line, alpha_values[0], sigma)[1]
+            for index, (pair, total) in enumerate(totals.items()):
+                if checkpoint and index % 256 == 0:
+                    checkpoint()
+                a, b = a_prices[pair[0]], b_prices[pair[1]]
                 if a not in incoming:
                     incoming[a] = ({'lower': income, 'upper': income} if a == final[line][0] else
                                    C.score_submission({**inference, 'a_bounds': {}}, team, a, 0))
@@ -102,13 +114,19 @@ def evaluate(prepared, window, team, checkpoint=None):
 
     ranked = sorted((result(pair, rows) for pair, rows in scores.items()),
                     key=lambda r: (-r['lower'], r['a_mult'], r['sigma'])) if selected else []
-    for row in ranked:
+    # Keep the runner learning artifact below its size limit: all aggregate
+    # scores, detailed game scores only for the displayed top ten.
+    for row in ranked[:10]:
+        if checkpoint:
+            checkpoint()
         row['games'] = [{**g, 'lower': round(g['lower'], 2),
                          'upper': round(g['upper'], 2) if math.isfinite(g['upper']) else None}
                         for g in scores[(row['a_mult'], row['sigma'])]]
     usable = any(g['replayed_lines'] for g in game_info)
     per_game = []
     for i, game in enumerate(game_info):
+        if checkpoint:
+            checkpoint()
         best = min((result(pair, [rows[i]]) for pair, rows in scores.items()),
                    key=lambda r: (-r['lower'], r['a_mult'], r['sigma']))
         per_game.append({**game, 'best': best if game['replayed_lines'] else None})
@@ -117,7 +135,7 @@ def evaluate(prepared, window, team, checkpoint=None):
             'replayed_lines': sum(g['replayed_lines'] for g in game_info),
             'fixed_lines': sum(g['fixed_lines'] for g in game_info),
             'combination_count': len(scores), 'best': ranked[0] if usable else None,
-            'ranking': ranked, 'per_game': per_game, 'exclusions': exclusions}
+            'detailed_games_top_n': 10, 'ranking': ranked, 'per_game': per_game, 'exclusions': exclusions}
 
 
 def report(grid):
@@ -126,6 +144,7 @@ def report(grid):
     lines = ['', f"## Retrospective A_MULT / SIGMA grid (last {grid.get('window_size', 10)} completed cached games)", '',
              f"Games: {grid['window_games']}; missing logs/reconciliation: {grid['missing_games']}; "
              f"replayed lines: {grid['replayed_lines']}; unchanged lines: {grid['fixed_lines']}.",
+             f"Combinations evaluated: {grid['combination_count']}; top 10 below.",
              'Original estimates, coverage, bias, policy caps and historical recall stay fixed. Opponents stay fixed.',
              'Ranked by conservative net lower bound. Overlapping intervals do not prove a winner; ties use smaller A_MULT then SIGMA.',
              'This is hindsight selection, not independent validation or automatic activation. Model/prompt changes may mix strategies.',

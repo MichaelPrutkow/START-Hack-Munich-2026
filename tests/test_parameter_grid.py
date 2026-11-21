@@ -2,6 +2,7 @@
 import copy
 import json
 import unittest
+from unittest.mock import patch
 from claim_to_fame import parameter_grid as G
 from claim_to_fame import feedback as F
 from tests.test_feedback import fixture, NOW
@@ -39,6 +40,35 @@ class GridTests(unittest.TestCase):
             self.assertLessEqual(candidate['lower'], income-paid+.001)
             if candidate['upper'] is not None:
                 self.assertGreaterEqual(candidate['upper'], income-paid-.001)
+
+    def test_fine_grid_reuses_axis_prices_and_includes_used_pair(self):
+        row = self.prepared()
+        # Retain a historical off-grid pair as a comparison even if its baseline
+        # no longer reproduces this fixture's submitted prices.
+        row[0]['est']['unused'] = {'1': {'a_mult': .855, 'sigma': .345}}
+        with patch.object(G, 'replay', wraps=G.replay) as replay:
+            result = G.evaluate([row], [1], 'us')
+        pairs = {(r['a_mult'], r['sigma']) for r in result['ranking']}
+        self.assertEqual(len(pairs), 7382)
+        self.assertIn((.86, .36), pairs)
+        self.assertIn((.5, .2), pairs)
+        self.assertIn((1.1, 1.4), pairs)
+        self.assertIn((.855, .345), pairs)
+        self.assertLess(replay.call_count, 200)
+        self.assertEqual(sum('games' in r for r in result['ranking']), 10)
+
+    def test_axis_separation_matches_direct_replay_with_adjustments(self):
+        rec = self.prepared()[0]
+        est = rec['est']['fast']['1']
+        rec['recall'] = {'mode': '2', 'lines': {'1': {'cap_hi': 63}}}
+        for fields in ({'p': .8, 'cap': 70, 'bias': 1.1, 'log_spread': .3,
+                        'uncertainty_applied': True}, {'stated': 40}, {'p': .5}):
+            est.update(fields)
+            for a in (.5, .86, 1.1):
+                for sigma in (.2, .36, 1.4):
+                    self.assertEqual(G.replay(rec, 1, a, sigma),
+                                     (G.replay(rec, 1, a, .2)[0],
+                                      G.replay(rec, 1, .5, sigma)[1]))
 
     def test_missing_estimate_stays_actual_for_all_candidates(self):
         row = self.prepared()
@@ -111,4 +141,5 @@ class GridIntegrationTests(unittest.TestCase):
         self.assertIn('last 20 completed cached games', F.render_report(state))
         self.assertEqual(state['parameter_grid']['window_size'], 20)
         F.write_state(state, self.root / 'grid.json')
+        self.assertLess((self.root / 'grid.json').stat().st_size, 5_000_000)
         self.assertIsNotNone(F.load_state(self.root / 'grid.json', 22, now=NOW))
