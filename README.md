@@ -38,7 +38,10 @@ uv run calibrate.py --team chineseModels
 uv run python test_runner.py
 ```
 ```bash
+uv run watch.py --team chineseModels
+```
+```bash
 uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3
 ```
 
-`eval_cases.py` replays the LLM step (old prompt from git HEAD vs current) on finished games and scores it against the leaderboard brackets; it submits nothing, waits outside game windows, but spends OpenAI tokens. `calibrate.py` reads the public leaderboard once per finished game (1 request/s, cached in `out/leaderboard/`; organizers allowed scraping but not hammering), derives the t interval per line, and with `out/rounds.jsonl` fits t/m with a censored MLE (one-sided brackets included; `--tier fast|deep` picks whose estimate) and backtests `A_MULT` × `SIGMA`.
+`watch.py` reports every finished game from the leaderboard (net, rank, our a against the t interval, no LLM) and raises a macOS alarm if we apparently did not submit. `eval_cases.py` replays the LLM step (old prompt from git HEAD vs current) on finished games and scores it against the leaderboard brackets; it submits nothing, waits outside game windows, but spends OpenAI tokens. `calibrate.py` reads the public leaderboard once per finished game (1 request/s, cached in `out/leaderboard/`; organizers allowed scraping but not hammering), derives the t interval per line, and with `out/rounds.jsonl` fits t/m with a censored MLE (one-sided brackets included; `--tier fast|deep` picks whose estimate) and backtests `A_MULT` × `SIGMA`.
