@@ -10,18 +10,20 @@ most, with guardrails (minimum data, minimum gain, robust across time, limited s
 Why automatic: games 7-9 showed that the spread of t/m is far wider than SIGMA 0.35 assumes
 (notes/TRANSAKTIONEN_G1-9.md). Complements feedback.py: that module calibrates our estimate m
 (bias, spread) per model/prompt and only after a chronological holdout; this one tunes the two
-pricing multipliers against the field from the first game on, using every logged game.; a fixed setting chosen early kept accepting the field's inflated
-claims. The guardrails keep one odd game from swinging the parameters.
+pricing multipliers against the field from the first game on, using every logged game. A fixed
+setting chosen early kept accepting the field's inflated claims, and from game 7 on our m was
+about 2.4 times t (games 7-12: median t/m 0.42), so A_MULT may go down to 0.50. The guardrails
+keep one odd game from swinging the parameters.
 """
 import math
 import statistics
 
 from . import pricing
 
-A_GRID = (0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00)
+A_GRID = (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00)
 S_GRID = (0.35, 0.50, 0.65, 0.80, 1.00, 1.20)
-BOUNDS = {"a_mult": (0.70, 1.00), "sigma": (0.30, 1.40)}
-STEP = {"a_mult": 0.05, "sigma": 0.30}          # largest change per update
+BOUNDS = {"a_mult": (0.50, 1.00), "sigma": (0.30, 1.40)}
+STEP = {"a_mult": 0.10, "sigma": 0.30}          # largest change per update
 MIN_LINES = 8                                    # lines with a usable estimate and bracket
 MIN_GAIN = 1000.0                                # EUR over all games (weighted), else keep
 HALF_LIFE = 10.0                                 # games; recent games weigh more

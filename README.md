@@ -80,7 +80,7 @@ transactions (`claim_to_fame/tuning.py`) and writes the chosen pair to `out/para
 runner re-reads `.env` and `out/params.json` before **every** game, so neither a manual `.env`
 change nor a tuning step needs a restart. Guardrails: at least 8 lines; weighted gain at least
 1,000 EUR (recent games weigh more, half-life 10 games); not worse in 2 of 3 chronological
-periods; at most 0.05 `A_MULT` and 0.30 `SIGMA` per update; bounds 0.70–1.00 and 0.30–1.40.
+periods; at most 0.10 `A_MULT` and 0.30 `SIGMA` per update; bounds 0.50–1.00 and 0.30–1.40.
 The first `params.json` is written only on a real change, so until then `.env` stays in charge.
 `AUTO_TUNE=0` in `.env` pins the `.env` values. A validated `feedback.py` calibration still
 overrides `SIGMA` on its eligible lines. Report without writing: `uv run tune.py`; on a machine
