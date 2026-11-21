@@ -52,6 +52,20 @@ uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3 --old-re
 
 `calibrate.py` fetches each completed game once (1 request/s, cached in `out/leaderboard/`), derives censored fair-price intervals and supports `--holdout-from <game>` for parameter comparisons. Accepted payments are not assumed to equal original demands when a payment cap could have applied.
 
+## Browser dashboard
+
+```bash
+uv run python -m dashboard.server
+```
+
+Open [the local dashboard](http://127.0.0.1:8765/). The dashboard checks for completed games once a minute and uses already downloaded rounds from `out/leaderboard/`. It caches newly fetched public transactions in `out/dashboard/public/`. It runs independently of the submitting runner and can also be used on a second team machine. On that machine, the public results are available and the local `out/rounds.jsonl` details appear only if the team has the relevant log there.
+
+Select your team, a round and an invoice position. The transaction list shows both sides of each matchup, payment, acceptance outcome and price bounds. The threshold `t` is shown as a range supported by the settled payments. The lower bound is inclusive and an available upper bound is exclusive. Local historical prices without a verified final submission are labelled as such.
+
+For a simulation, change `a`, `b`, or both for a position. The hypothetical result is an interval against the same opponents and is compared with the actual net result. Automatic suggestions appear when one of the tested historical changes improves even the lower bound. They are retrospective scenarios and the dashboard uses no team API or OpenAI keys.
+
+Add `--offline` to use only cached data, `--port 8766` to change the local port, or `--team NAME` to use a different team for the public data fetch and local runner log. To export a JSON report for completed games after game 7, run `uv run python -m dashboard.server --report --after 7`. Add `--offline` for an export from existing cached rounds.
+
 ## Learning between rounds
 
 The scheduled runner now starts one background learner automatically (`LEARNING_AUTO=1`, `TEAM_NAME=chineseModels`). It uses only public leaderboard GETs and local round logs, with no model calls. It pauses before the next game window, retries delayed publication, and resumes partially downloaded pages. Dry runs, one-off games and `--check` do not start the learner. **Only Philip's Mac runs the submitting runner.**

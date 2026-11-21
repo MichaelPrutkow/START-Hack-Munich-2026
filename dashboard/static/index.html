@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#16264a">
+  <title>Claim to Fame · Rundenanalyse</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-content">
+      <a class="brand" href="/" aria-label="Claim to Fame, Startseite">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        Claim to Fame
+      </a>
+      <div class="topbar-meta">
+        <a class="source-link" href="https://c2f.public.quantco.cloud/leaderboard/" target="_blank" rel="noreferrer">QuantCo-Leaderboard</a>
+        <span class="connection" id="connection" data-state="loading" role="status">Lade Daten</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="sidebar" aria-label="Runden und Team">
+      <div class="sidebar-heading">
+        <h2>Runden</h2>
+        <button id="refresh" class="button button-small" type="button">Aktualisieren</button>
+      </div>
+      <label class="field team-field">
+        <span>Unser Team</span>
+        <select id="team" disabled><option>chineseModels</option></select>
+      </label>
+      <label class="field mobile-round">
+        <span>Runde auswählen</span>
+        <select id="round-select" disabled><option>Runden werden geladen</option></select>
+      </label>
+      <nav id="games" class="round-list" aria-label="Abgeschlossene Runden"></nav>
+    </aside>
+
+    <div class="main-content">
+      <div class="page-heading">
+        <div>
+          <h1>Rundenanalyse</h1>
+          <p id="overview-context" class="muted" role="status">Abgeschlossene Runden werden geladen.</p>
+        </div>
+      </div>
+      <div class="notice" id="notice" role="status" hidden></div>
+      <section id="summary" class="card-grid" aria-label="Bilanz des Teams" hidden></section>
+      <section id="overview-empty" class="panel empty">
+        <span>Warte auf abgerechnete Runden.</span>
+      </section>
+
+      <section id="round" aria-labelledby="round-title" hidden>
+        <header class="section-heading">
+          <div>
+            <h2 id="round-title">Rundendetails</h2>
+            <p id="round-context" class="muted"></p>
+          </div>
+        </header>
+        <div id="round-summary" class="card-grid" aria-label="Rundenbilanz"></div>
+
+        <div class="analysis-grid">
+          <section class="panel position-panel" aria-labelledby="position-title">
+            <div class="panel-heading">
+              <h3 id="position-title">Faire Preisgrenze</h3>
+              <label class="field inline-field"><span>Position</span><select id="position"></select></label>
+            </div>
+            <div id="position-insights"></div>
+          </section>
+
+          <section class="panel scenario-panel" aria-labelledby="scenario-title">
+            <div class="panel-heading">
+              <h3 id="scenario-title">Was wäre wenn?</h3>
+              <span class="badge badge-neutral">Simulation</span>
+            </div>
+            <p class="muted scenario-intro">Ändere die Forderung oder das Annahmelimit für diese Position. Die anderen Teams bleiben in der Berechnung unverändert.</p>
+            <form id="scenario-form" class="scenario-form">
+              <label class="field"><span>Forderung <var>a</var></span><span class="currency-input"><input id="scenario-a" type="number" step="0.01" min="0" inputmode="decimal" placeholder="Unverändert"><span>€</span></span></label>
+              <label class="field"><span>Annahmelimit <var>b</var></span><span class="currency-input"><input id="scenario-b" type="number" step="0.01" min="0" inputmode="decimal" placeholder="Unverändert"><span>€</span></span></label>
+              <div class="form-actions">
+                <button class="button button-primary" id="simulate" type="submit">Simulieren</button>
+                <button class="button" id="reset-scenario" type="button">Zurücksetzen</button>
+              </div>
+            </form>
+            <div id="scenario-presets" class="scenario-presets" aria-label="Berechnungen mit belegten Grenzen"></div>
+            <div id="scenario-result" class="scenario-result" aria-live="polite"></div>
+          </section>
+        </div>
+
+        <section class="panel ledger" aria-labelledby="ledger-title">
+          <div class="panel-heading ledger-heading">
+            <div>
+              <h3 id="ledger-title">Transaktionen</h3>
+              <p class="muted" id="transaction-count" role="status"></p>
+            </div>
+            <label class="field search"><span>Team suchen</span><input id="search" type="search" placeholder="Rechnungssteller oder Versicherung"></label>
+          </div>
+          <div class="filters" aria-label="Transaktionen filtern">
+            <label class="field"><span>Rolle</span><select id="role-filter"><option value="all">Alle Teams</option><option value="mine">Mein Team</option><option value="issuer">Wir fordern</option><option value="reviewer">Wir prüfen</option></select></label>
+            <label class="field"><span>Position</span><select id="line-filter"><option value="all">Alle Positionen</option></select></label>
+            <label class="field"><span>Ergebnis</span><select id="outcome-filter"><option value="all">Alle Ergebnisse</option><option value="accepted">Angenommen</option><option value="rejected_paid">Abgelehnt, mit Zahlung</option><option value="rejected_zero">Abgelehnt, ohne Zahlung</option><option value="miss">Belegter Review-Fehler</option></select></label>
+          </div>
+          <div class="table-scroll" tabindex="0" aria-label="Transaktionsliste, horizontal scrollbar">
+            <table>
+              <thead><tr>
+                <th scope="col"><button data-sort="line" type="button">Pos.</button></th>
+                <th scope="col"><button data-sort="issuer" type="button">Rechnungssteller</button></th>
+                <th scope="col"><button data-sort="reviewer" type="button">Versicherung</button></th>
+                <th scope="col" class="numeric">Forderung <var>a</var></th>
+                <th scope="col" class="numeric">Limit <var>b</var></th>
+                <th scope="col">Ergebnis</th>
+                <th scope="col" class="numeric"><button data-sort="amount" type="button">Zahlung</button></th>
+                <th scope="col" class="numeric">Saldo für uns</th>
+              </tr></thead>
+              <tbody id="transactions"></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="pagination" hidden>
+            <button class="button button-small" type="button" id="previous-page">Zurück</button><span id="page-status"></span><button class="button button-small" type="button" id="next-page">Weiter</button>
+          </div>
+        </section>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

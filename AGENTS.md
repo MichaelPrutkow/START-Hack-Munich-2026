@@ -68,6 +68,7 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 15 | Runner-Integration, Dokumentation und Pitch | [X] | fertig | `runner.py`, `watch.py`, `tests/test_runtime.py`, `README.md`, `.env.example`, `writeup/`, `AGENTS.md` |
 
 | 16 | Merge mit Michaels optionaler max-Stufe und Preistabellen; offline prüfen und pushen | [X] | fertig | `runner.py`, `tests/test_merge_tiers.py`, `AGENTS.md` |
+| 17 | Browser-Dashboard und Abgleich aller abgeschlossenen Runden | [X] | fertig | `dashboard/`, `tests/test_dashboard*`, `README.md`, `AGENTS.md` |
 
 
 | 17 | Briefing-Abgleich und Parameterlernen vervollständigen | [X/params] | fertig | `claim_to_fame/feedback.py`, `tests/test_feedback.py` |
@@ -221,6 +222,12 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Fokus hat Priorität 2,5 zwischen deep (2) und max (3), damit gleich konsistente Ergebnisse nicht abhängig von der Ankunftsreihenfolge die max-Stufe verdrängen. KeyPool/API-Key-Nutzung unverändert.
 - Neue Offline-Regressionen prüfen max-Konfiguration, beide Ankunftsreihenfolgen, verspätete max-Antworten und Preistabellen. Kein Live-Runner, keine Spielabgabe oder LLM-Anfrage.
 - Abschlussprüfung: 77 Offline-Tests, davon 76 bestanden und 1 mangels Case-0-PDF übersprungen; `git diff --check` sauber. `build_tiers`, `log_prices`, `KeyPool`, `llm_call` und `assess` per AST gegen Michaels `18e51e3` unverändert. Merge wird mit ausdrücklicher User-Freigabe auf `main` gepusht.
+
+### 21.11.2026 · Codex · Analyse-Dashboard und Abgleich bis Spiel 13
+
+- Start `uv run python -m dashboard.server`, Browser `http://127.0.0.1:8765/`. Die Anwendung liest das öffentliche Leaderboard im Minutentakt, übernimmt vollständige Runden aus `out/leaderboard/` und speichert neue unter `out/dashboard/public/`. Runner-Logdetails bleiben lokal. Einzelauswertung mit Rollen-/Ergebnisfiltern, belegter t-Spanne, Abstand `a − t` und konservativer Simulation je Position.
+- Live-Stand 16:51: 13 abgeschlossene Runden, 6.732 Transaktionen. Spiele 8–13: 4.224 Transaktionen, unser Netto −12.394,99 €. Wir zahlten 13.852,97 € für belegbar überhöhte Forderungen, allein 5.873,94 € in G9 Pos. 1. G12 Pos. 2: unser a 680 €, t von 605,20 € bis unter 680 €. Nur a auf 605,20 € zu ändern hätte im Rückblick +8.700,60 bis +9.003,20 € gebracht, bei unveränderten Gegnerwerten.
+- 92 Offline-Tests, JS-Syntax und Browser-Test der G12-Simulation bestanden. Der Server läuft lokal. Für einen neuen Datenabzug `uv run python -m dashboard.server --report --after 7` nutzen oder den laufenden Browser-Abruf abwarten.
 
 ### 21.11.2026 16:45 · Claude · Transaktionsanalyse G1–9 und automatisches Tuning (Branch `auto-tune`, nicht gepusht)
 
