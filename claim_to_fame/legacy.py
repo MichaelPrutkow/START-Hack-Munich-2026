@@ -52,7 +52,8 @@ def recover_record(rec, *, case_dir=None):
     Only a complete explicitly named winner is recovered. Missing prices are never
     filled from another tier or a fallback. Existing final provenance, including
     malformed partial provenance, is never repaired here. Recovered records remain
-    ineligible for parameter fitting when original estimator identities are absent.
+    marked as historical training only when original estimator identities are absent;
+    they cannot serve as validation evidence for a current estimator.
     """
     if not isinstance(rec, Mapping):
         return rec, "not_a_round_record"

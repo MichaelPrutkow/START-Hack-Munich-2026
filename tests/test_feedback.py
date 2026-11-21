@@ -387,7 +387,8 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(state["learning_counts"]["recovered_legacy_games"], 1)
         self.assertEqual(len(state["memory"]), 1)
         self.assertEqual(state["calibrations"], [])
-        self.assertEqual(state["training_exclusions"][0]["reason"], "missing_model_prompt_or_config_identity")
+        self.assertEqual(state["training_exclusions"], [])
+        self.assertEqual(state["learning_counts"]["historical_training_only"], 1)
         self.assertIn("legacy prices recovered", F.render_report(state))
 
     def test_field_behavior_does_not_label_zero_prices_or_unknown_as_fraud(self):

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build private learning and loss reports; cached/offline unless --refresh is explicit."""
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 
@@ -43,11 +44,15 @@ def show_state(state):
     validated = sum(c["status"] == "validated" for c in state["calibrations"])
     print(f"Learning: {len(state['games'])} reconciled games, {state['summary']['lines']} lines, "
           f"{len(state['excluded'])} excluded; {validated} validated calibrations.")
+    print("Training data:", state.get("learning_counts", {}))
+    print("Training exclusions:", dict(Counter(x["reason"] for x in state.get("training_exclusions", []))))
     for candidate in state["calibrations"]:
         params = {key: candidate.get(key) for key in ("a_mult", "bias", "sigma")}
         print(f"  {candidate['tier']} ({candidate.get('model')}): {candidate['status']}; "
               f"{candidate['reason']}; parameters={params}; "
-              f"fit={candidate['fit_count']}, holdout={candidate['holdout_count']}")
+              f"fit={candidate['fit_count']}, holdout={candidate['holdout_count']}; "
+              f"historical_train={candidate['historical_train_count']}; "
+              f"train_games={candidate['train_games']}, holdout_games={candidate['holdout_games']}")
 
 
 def main(argv=None):

@@ -20,8 +20,8 @@ from .invoices import norm_unit
 from .pricing import ceil_c, floor_c
 
 
-SCHEMA_VERSION = 2
-ALGORITHM = "interval-fit-field-grid-v2"
+SCHEMA_VERSION = 3
+ALGORITHM = "interval-fit-historical-bootstrap-v3"
 CAMPAIGN = "2026-11"
 MIN_GAMES, MIN_TRAIN, MIN_HOLDOUT = 6, 16, 8
 MIN_GAIN = 0.05
@@ -35,7 +35,8 @@ CONTROLS = {"minimum_games": MIN_GAMES, "minimum_fit_lines": MIN_TRAIN,
             "sigma_grid": list(SIGMA_GRID),
             "selection": "training conservative net only; frozen chronological holdout",
             "baseline": "actual observed holdout net; denominator max(abs(net), 1 EUR)",
-            "scope": "uncapped, no stated amount, no uncertainty adjustment"}
+            "scope": "uncapped, no stated amount, no uncertainty adjustment",
+            "historical_training": "verified raw predictions before first target-cohort game; never holdout"}
 
 
 def policy_fingerprint(policy):
@@ -259,11 +260,19 @@ def _score_rows(rows, params, team, checkpoint=None):
     return lower, upper
 
 
-def _calibrate(rows, identity, team, checkpoint=None):
+def _calibrate(rows, identity, team, checkpoint=None, historical_rows=()):
     games = sorted({r["game"] for r in rows})
     n_holdout = max(2, len(games) // 3)
     train_games, holdout_games = games[:-n_holdout], games[-n_holdout:]
     train = [r for r in rows if r["game"] in train_games]
+    # Missing versions do not invalidate observed predictions. Borrow them only
+    # for fitting when this target cohort lacks training evidence. Validation
+    # always uses the target's own fully identified, later games.
+    historical = []
+    if sum(r["d"]["t"][0] > 0 for r in train) < MIN_TRAIN:
+        historical = [r for r in historical_rows if r["game"] < min(games)]
+        train = historical + train
+        train_games = sorted({r["game"] for r in train})
     fit = [r for r in train if r["d"]["t"][0] > 0]
     holdout = [r for r in rows if r["game"] in holdout_games]
     baseline_params = {"a_mult": statistics.median(r["baseline_alpha"] for r in (train or rows)),
@@ -272,12 +281,20 @@ def _calibrate(rows, identity, team, checkpoint=None):
     evidence = [{"game": r["game"], "line": r["line"], "m": r["m"], "p": r["p"],
                  "applied": r["applied_parameters"], "baseline": [r["baseline_alpha"], r["baseline_sigma"]],
                  "transactions": sorted([(x["issuer"], x["reviewer"], x["accepted"], x["amount"])
-                                           for x in r["d"]["transactions"]])} for r in rows]
+                                           for x in r["d"]["transactions"]]),
+                 "source_identity": r["identity"], "historical_only": bool(r.get("historical_only"))}
+                for r in train + holdout]
     evidence_hash = hashlib.sha256(json.dumps(evidence, sort_keys=True, allow_nan=False).encode()).hexdigest()
     candidate = {**identity, "algorithm": ALGORITHM, "evidence_hash": evidence_hash,
                  "status": "shadow", "activation": "none",
                  "reason": "insufficient chronological evidence", "reason_code": "insufficient_samples",
-                 "sample_count": len(rows), "train_count": len(train), "holdout_count": len(holdout),
+                 "sample_count": len(train) + len(holdout), "train_count": len(train), "holdout_count": len(holdout),
+                 "training_source": "historical_bootstrap" if historical else "same_estimator",
+                 "historical_train_count": len(historical),
+                 "historical_train_games": sorted({r["game"] for r in historical}),
+                 "historical_sources": [{"game": r["game"], "line": r["line"], **r["identity"]}
+                                        for r in historical],
+                 "target_cohort_games": games,
                  "fit_count": len(fit), "fit_population": "confirmed-covered training lines; holdout includes all eligible predictions",
                  "fit_limitation": "positive-bound training selection may bias distribution fit; promotion depends on all eligible holdout lines",
                  "calibrated_observation_count": sum(r["calibration_applied"] for r in rows),
@@ -310,7 +327,8 @@ def _calibrate(rows, identity, team, checkpoint=None):
     if not scores:
         candidate.update(reason="training payoff bounds are unbounded", reason_code="unbounded_training")
         return candidate
-    if len(games) < MIN_GAMES or len(fit) < MIN_TRAIN or len(holdout) < MIN_HOLDOUT:
+    if (len(set(train_games + holdout_games)) < MIN_GAMES or len(fit) < MIN_TRAIN
+            or len(holdout) < MIN_HOLDOUT or len(holdout_games) < 2):
         return candidate
     baseline = sum(r["net"] for r in holdout)
     lower, upper = _score_rows(holdout, candidate, team, checkpoint)
@@ -333,14 +351,15 @@ def _calibrate(rows, identity, team, checkpoint=None):
     return candidate
 
 
-def _training_observation(rec, source, est, final):
+def _training_observation(rec, source, est, final, *, allow_historical=False):
     """Return raw estimator and recorded pricing provenance, or an explicit exclusion."""
     import calibrate as C
 
     identity = _identity(rec, source)
     if source == "rules":
         return None, "rule_fallback"
-    if any(not isinstance(value, str) or not value for value in identity.values()):
+    missing_identity = any(not isinstance(value, str) or not value for value in identity.values())
+    if missing_identity and not allow_historical:
         return None, "missing_model_prompt_or_config_identity"
     if not est:
         return None, "missing_estimate"
@@ -370,7 +389,8 @@ def _training_observation(rec, source, est, final):
             return None, "logged_parameters_do_not_reproduce_submission"
         return {"m": m, "p": p, "baseline_alpha": baseline_alpha, "baseline_sigma": baseline_sigma,
                 "applied_parameters": {"a_mult": alpha, "bias": bias, "sigma": sigma},
-                "calibration_applied": applied, "identity": identity}, None
+                "calibration_applied": applied, "identity": identity,
+                "historical_only": missing_identity}, None
     except (KeyError, TypeError, ValueError, OverflowError):
         return None, "invalid_price_or_estimate_provenance"
 
@@ -401,7 +421,7 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
                 records[gid] = rec
             except (TypeError, ValueError, KeyError):
                 excluded.append({"record": number, "reason": "malformed round JSON"})
-    reports, memory, cohorts, training_exclusions = [], [], {}, []
+    reports, memory, cohorts, training_exclusions, historical_rows = [], [], {}, [], []
     for gid, rec in sorted(records.items()):
         if checkpoint:
             checkpoint()  # Outside quarantine: a scheduling deadline aborts the whole rebuild.
@@ -432,18 +452,19 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
                         "coverage": "historically covered; reassess damage relation and coverage for this case",
                         "policy_limited": bool(est.get("cap") or est.get("shared") or est.get("stated")),
                         "source": {"cache": cache.name, "tier": source, **_identity(rec, source)}})
-                observation, reason = _training_observation(rec, source, est, final[line])
+                observation, reason = _training_observation(rec, source, est, final[line], allow_historical=True)
                 row["learning"] = {"eligible": observation is not None, "reason": reason,
                                    "identity": _identity(rec, source)}
                 if reason:
                     training_exclusions.append({"game": gid, "line": line, "tier": source, "reason": reason})
                     continue
                 row["learning"]["applied_parameters"] = observation["applied_parameters"]
+                row["learning"]["scope"] = "historical_training_only" if observation["historical_only"] else "target_cohort"
                 key = tuple(observation["identity"].values())
                 actual_net = (math.fsum(float(x["amount"]) for x in tx if x["issuer"] == team)
                               - math.fsum(float(x["amount"]) for x in tx if x["reviewer"] == team))
-                cohorts.setdefault(key, []).append({"game": gid, "line": line, "d": d,
-                                                    "net": actual_net, **observation})
+                target = historical_rows if observation["historical_only"] else cohorts.setdefault(key, [])
+                target.append({"game": gid, "line": line, "d": d, "net": actual_net, **observation})
             reports.append({"game": gid, "summary": _summarize(game_rows), "lines": game_rows,
                             "field_counts": _field_counts(lines, data["tx"], team),
                             "legacy_recovered": bool(rec.get("legacy_recovered")),
@@ -452,6 +473,7 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
             # A partially processed game must not leak into recall or calibration.
             memory = [m for m in memory if m["game"] != gid]
             cohorts = {k: [r for r in rows if r["game"] != gid] for k, rows in cohorts.items()}
+            historical_rows = [r for r in historical_rows if r["game"] != gid]
             training_exclusions = [r for r in training_exclusions if r["game"] != gid]
             excluded.append({"game": gid, "reason": str(exc)[:160]})
     all_rows = [r for game in reports for r in game["lines"]]
@@ -473,7 +495,7 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
             continue
         if checkpoint:
             checkpoint()
-        candidate = _calibrate(rows, rows[0]["identity"], team, checkpoint)
+        candidate = _calibrate(rows, rows[0]["identity"], team, checkpoint, historical_rows)
         candidate["validated_at"] = created.isoformat() if candidate["status"] == "validated" else None
         calibrations.append(_retain_candidate(candidate, rows, prior, team, created, checkpoint))
     return {"schema_version": SCHEMA_VERSION, "algorithm": ALGORITHM,
@@ -481,7 +503,9 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
             "campaign": CAMPAIGN, "team": team,
             "created_at": created.isoformat(), "max_game": max((g["game"] for g in reports), default=0),
             "games": games, "excluded": excluded, "training_exclusions": training_exclusions,
-            "learning_counts": {"eligible": sum(len(rows) for rows in cohorts.values()),
+            "learning_counts": {"eligible": len(historical_rows) + sum(len(rows) for rows in cohorts.values()),
+                "historical_training_only": len(historical_rows),
+                "target_cohort": sum(len(rows) for rows in cohorts.values()),
                 "ineligible": len(training_exclusions),
                 "calibrated_observations": sum(r["calibration_applied"] for rows in cohorts.values() for r in rows),
                 "recovered_legacy_games": sum(g["legacy_recovered"] for g in reports)},
@@ -611,6 +635,8 @@ def _valid_state(state, before_game, now, max_age_hours):
         if (candidate["sample_count"] != candidate["train_count"] + candidate["holdout_count"]
                 or candidate["fit_count"] > candidate["train_count"]):
             return False
+        if not _historical_provenance_valid(candidate):
+            return False
         if not 0 < _finite(candidate["a_mult"], positive=True) <= 3:
             return False
         if not 0.75 <= _finite(candidate["bias"], positive=True) <= 1.25:
@@ -649,17 +675,38 @@ def load_state(path, before_game, *, max_age_hours=36, now=None, model=None, pro
 load_learning = load_state
 
 
+def _historical_provenance_valid(candidate):
+    """Historical predictions may train a target policy, never impersonate its validation."""
+    try:
+        sources = candidate["historical_sources"]
+        count, games = candidate["historical_train_count"], candidate["historical_train_games"]
+        target = candidate["target_cohort_games"]
+        return (type(count) is int and 0 <= count <= candidate["train_count"]
+                and isinstance(sources, list) and len(sources) == count
+                and len({(r["game"], r["line"]) for r in sources}) == count
+                and games == sorted({r["game"] for r in sources})
+                and target == sorted(set(target)) and bool(target)
+                and set(candidate["holdout_games"]).issubset(target)
+                and set(target) <= set(candidate["train_games"] + candidate["holdout_games"])
+                and set(games).issubset(candidate["train_games"])
+                and all(g < min(target) for g in games)
+                and candidate["training_source"] == ("historical_bootstrap" if count else "same_estimator"))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def _validated(candidate):
     try:
         train, held = candidate["train_games"], candidate["holdout_games"]
         baseline, lower = candidate["holdout_baseline_net"], candidate["holdout_candidate"]["lower"]
         return (candidate.get("status") == "validated" and candidate.get("algorithm") == ALGORITHM
+                and _historical_provenance_valid(candidate)
                 and candidate.get("a_mult") in A_MULT_GRID
                 and 0.75 <= candidate["bias"] <= 1.25 and 0.2 <= candidate["sigma"] <= 1.40
                 and candidate.get("active_parameters") == {k: candidate[k] for k in PARAMETER_KEYS}
                 and candidate.get("minimum_gain") == MIN_GAIN
                 and len(set(train + held)) >= MIN_GAMES
-                and train and held and max(train) < min(held)
+                and train and len(held) >= 2 and max(train) < min(held)
                 and candidate["train_count"] >= MIN_TRAIN and candidate["holdout_count"] >= MIN_HOLDOUT
                 and candidate["fit_count"] >= MIN_TRAIN
                 and math.isfinite(lower) and math.isfinite(baseline)
@@ -821,6 +868,9 @@ def render_report(state):
                      f"A_MULT {candidate['a_mult']:.4f}, bias {candidate['bias']:.4f}, sigma {candidate['sigma']:.4f}; "
                      f"train {candidate['train_count']}, covered fit {candidate['fit_count']}, holdout {candidate['holdout_count']}; "
                      f"{candidate['reason']}.")
+        lines.append(f"  Training source: {candidate['training_source']}; "
+                     f"historical {candidate['historical_train_count']} lines from games {candidate['historical_train_games']}; "
+                     f"target-cohort holdout games {candidate['holdout_games']}.")
         if candidate.get("latest_proposal"):
             latest = candidate["latest_proposal"]
             lines.append(f"  Latest proposal {latest['proposed_parameters']}: {latest['reason']}; "

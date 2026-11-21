@@ -78,6 +78,8 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 
 ## Offene Fragen
 
+- [x] Historische Lernbasis trotz fehlender Versionskennungen: User beauftragt die Korrektur und Integration von Michaels neuem Push ausdrücklich. [X] übernimmt `feedback.py`, `learn.py`, Tests und Dokumentation im isolierten Klon auf `38d93fb`; Status fertig, offline geprüft. Kein Live-Runner.
+
 - [x] Welche Challenge? → QuantCo. [U]
 - [ ] Zählen späte Runden mehrfach (August: letzte 20 dreifach)? → Orga/Discord fragen. [X]
 - [ ] Höhe der absoluten Untergrenze von `c`. [X]
@@ -264,3 +266,11 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - `runner.py`: Rundenrekord mit `commit` (inkl. `+dirty`), `confirmed` (vom Server bestätigte Stufen) und `shadow` (`shadow_variants`, drei vorab festgelegte Varianten, nie gesendet). `tune.py --shadow` bewertet sie mit `score_submission`-Grenzen gegen das Gesendete.
 - `claim_to_fame/tuning.py`: Replay mit `calibrate.score_submission` (Bereiche, Zahlungsdeckel) statt Interpolation; geprüft wird der vorgeschlagene Zwischenschritt (Mittelwert ≥ 1.000, ungünstigster Fall nicht schlechter, 2 von 3 Perioden, ohne bestes Spiel noch positiv). `tune.py` loggt Datenstand (`data`) und schreibt bei unveränderten Daten keinen zweiten Schritt.
 - Tests: Regressionsfall gemeinsames Limit 400/100 (Summe bleibt ≤ 100, war schon korrekt), `tests/test_shadow.py`, Rekordfelder in `tests/test_runtime.py`. Nicht geändert: `eval_cases.py` bewertet bereits die gesendeten a/b mit Grenzen.
+
+### 21.11.2026 · Codex · Historische Trainingsbasis statt Ausschluss wegen fehlender Kennungen
+
+- User meldet: 47 Positionen wegen fehlender Modell-/Prompt-/Konfigurationskennung ausgeschlossen, nur fünf passende Zeilen aus G13/14, daher keine Trainingszeilen. Neuauftrag: alte Schätzungen mit öffentlichen Ergebnissen nutzen und Michaels Push integrieren. `origin/main` abgerufen, Basis `38d93fb` mit Dashboard und externer Review bleibt vollständig erhalten.
+- `feedback.py` Schema 3: Alte rohe Schätzungen werden nach vollständigem Abrechnungs- und Preisabgleich als `historical_training_only` gesammelt. Fehlende IDs bleiben fehlend und werden als Herkunft dokumentiert. Wenn eine aktuelle Kohorte zu wenig Trainingsdaten hat, werden ausschließlich ältere historische Spiele vor ihrem ersten Spiel fürs Training verwendet. Die spätere Prüfung und Anwendung bleiben auf die identifizierte Zielkohorte beschränkt; nie historische Selbstvalidierung oder erfundene Schätzungen aus öffentlichen Zahlungen.
+- Mindestbelege bleiben 16 gedeckte Trainingszeilen, acht aktuelle Prüfzeilen, mindestens zwei aktuelle Prüfspiele und sechs Spiele insgesamt, plus 5 % konservativer Vorteil. Bei fünf aktuellen Prüfzeilen wird nun bereits trainiert, aber noch keine automatische Freigabe behauptet. Diagnose nennt historische Mengen, Train-/Prüfspiele und tatsächliche Ausschlussgründe.
+- 164 Offline-Tests: 163 bestanden, eine mangels Case-0-PDF übersprungen. Neue Regressionen: historischer Fit mit fünf Prüfzeilen, erfolgreiche Freigabe bei acht, Ablehnung bei schlechten aktuellen Ergebnissen, kein Leak späterer Altlogs, keine erfundenen m, keine Altlog-Selbstvalidierung und Ablehnung manipulierter Herkunft. Kein Live-Runner, keine API-/LLM-Aufrufe. `runner.py`, Michaels Dashboard/Shadow-/Tuning-Code bleiben unverändert.
+- Für Philip: nach Pull nur seinen Runner zwischen Spielfenstern neu starten. Die nächste automatische Aktualisierung baut aus vorhandenen Logs/Caches; ein separater Lernprozess oder Datei-Upload ist nicht nötig. Neue Parameter und ein Turniergewinn sind erst nach realer Freigabe belegt.
