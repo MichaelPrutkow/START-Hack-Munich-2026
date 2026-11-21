@@ -653,6 +653,7 @@ def play_game(gid, start, dry=False, use_llm=True):
     confirmed = ["provisional"] if prov_ok else []       # stages whose submission the server confirmed
     t_prov = time.time() - t_key
     log.info("[%s] %d lines, provisional after %.1fs", gid, len(items), t_prov)
+    log.info("[%s] .env: A_MULT %.3f  SIGMA %.3f", gid, A_MULT, SIGMA)
     identity = strategy_identity()
     policy, desc = read_text(d, "policy*.txt"), read_text(d, "description*.txt")
     state_path = Path(os.environ.get("LEARNING_FILE", str(OUT / "learning.json")))
