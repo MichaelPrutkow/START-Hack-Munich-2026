@@ -57,6 +57,7 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 7 | Review `runner.py`: Parser gegen Case-0-PDF, Brutto/MwSt., Strategie a/b | [C] | fertig | `runner.py`, `test_runner.py` |
 | 8 | Auswertung der ersten Runden (Leaderboard), Kalibrierung von a/b | [C] | in Arbeit | `calibrate.py` |
 | 9 | Write-up (1 Seite) und Pitch | – | offen | `writeup/` |
+| 10 | Runner modularisieren, Einstiegspunkte erhalten, offline verifizieren | [X] | fertig | `runner.py`, `claim_to_fame/`, `eval_cases.py`, `test_runner.py`, `tests/`, `README.md`, `.env.example` |
 
 ## Offene Fragen
 
@@ -145,3 +146,12 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - `runner.py`: Klausel vor den Zahlen, Fachregeln im Prompt, Policen-Beträge per Regex am Prompt-Ende, `shared_cap` + `apply_shared_caps` (anteilige Kürzung), `DEEP_VOTES` Default 3, `DISAGREE` per `.env`. `calibrate.py`: zensierte t/m-Schätzung, `--tier`. Neu `eval_cases.py` (Offline-Replay, gibt nichts ab, wartet außerhalb der Spielfenster, kostet Token).
 - Beleg und verworfene Regel: `notes/DECISIONS.md` Zeile 15:10. Tests: `test_runner.py` 6/6, Offline-Smoke-Test von `play_game` (dry, Fake-LLM).
 - Nächster Schritt: Philip `git pull`, in `.env` `DEEP_VOTES=3` setzen (oder Zeile löschen), Neustart zwischen zwei Spielfenstern, danach `calibrate.py --tier deep` beobachten.
+
+### 21.11.2026 15:21 · Codex · Runner modularisiert und offline verifiziert
+
+- Auftrag [U]: neuesten Push prüfen, Struktur verbessern, Änderungen auflisten; ausdrücklich **nicht pushen**, zusätzlich pullen. `git fetch origin` und `git pull --ff-only` erfolgreich: `6cd9340`, beim Pull bereits aktuell.
+- `runner.py` von 755 auf 531 Zeilen reduziert: Parser/Fallback nach `claim_to_fame/invoices.py`, Prompt/Schema nach `claim_to_fame/prompts.py`, Aggregation/Limits/Preisregel nach `claim_to_fame/pricing.py`. Bisherige CLI und `runner`-Hilfsfunktionen bleiben verfügbar; Laufzeiteinstellungen werden explizit an die Preislogik weitergereicht.
+- `eval_cases.py` lädt historische Module zusammen mit dem gewählten Git-Commit und stellt danach die aktuellen Imports wieder her. So mischt der Offline-Vergleich keine alten und neuen Implementierungen. README enthält Modulübersicht und Ablauf für spätere Team-Pushes; `.env.example` nur mit aktualisiertem Pfadhinweis.
+- `test_runner.py` startet die Suite unter `tests/`: 13 Tests, davon 12 bestanden und 1 mangels entschlüsselter Case-0-PDF übersprungen. Neue Prüfungen: Laufzeiteinstellungen, unvollständige/fehlgeschlagene LLM-Antworten, Tier-Reihenfolge und getrennte historische Imports (inkl. Fehlerfall).
+- Verifikation: `.venv/bin/python -B test_runner.py`, `git diff --check`; zusätzlich 2.000 Preis-, 500 Aggregations- und 500 Shared-Cap-Vergleiche identisch zu `6cd9340`, Prompt/Schema identisch und verbliebene Laufzeitfunktionen strukturell unverändert. Kein Live-Runner gestartet, keine API-/LLM-Aufrufe.
+- Änderungen werden nur lokal committet. Nächster Schritt: Michaels nächsten Push abrufen, Änderungen an verschobenen Blöcken in die jeweiligen Module integrieren, Offline-Suite erneut ausführen und dem User vor dessen Push zeigen. `calibrate.py` bleibt unverändert bei [C].

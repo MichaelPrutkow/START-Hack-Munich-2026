@@ -10,7 +10,14 @@ Waits outside the 60 s game windows so it never competes with the live runner fo
 
 Not a runner: no lockfile, no PUT. Results go to out/eval/.
 """
-import argparse, importlib.util, json, math, subprocess, sys, time
+import argparse
+import importlib.util
+import json
+import math
+import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
 
 import runner as R
@@ -21,13 +28,46 @@ EVAL = ROOT / "out" / "eval"
 
 
 def load_old(ref):
+    """Load one complete source revision without mixing old and current domain modules."""
     EVAL.mkdir(parents=True, exist_ok=True)
-    p = EVAL / "runner_old.py"
-    p.write_text(subprocess.run(["git", "show", f"{ref}:runner.py"], cwd=ROOT, check=True,
-                                capture_output=True, text=True).stdout)
+    revision = subprocess.run(
+        ["git", "rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    paths = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", revision, "--", "runner.py", "claim_to_fame"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    snapshot = Path(tempfile.mkdtemp(prefix=f"runner_{revision[:8]}_", dir=EVAL))
+    for name in paths:
+        if name.endswith(".py"):
+            p = snapshot / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(subprocess.run(
+                ["git", "show", f"{revision}:{name}"], cwd=ROOT, check=True, capture_output=True,
+            ).stdout)
+    p = snapshot / "runner.py"
     spec = importlib.util.spec_from_file_location("runner_old", p)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+
+    def is_domain(name):
+        return name == "claim_to_fame" or name.startswith("claim_to_fame.")
+
+    # Import eagerly from the snapshot, then restore the current runner's import cache.
+    # Existing function/module references retain their own revision's globals.
+    saved_modules = {k: v for k, v in sys.modules.items() if is_domain(k)}
+    saved_path = sys.path[:]
+    try:
+        for name in saved_modules:
+            del sys.modules[name]
+        sys.path.insert(0, str(snapshot))
+        spec.loader.exec_module(mod)
+    finally:
+        for name in list(sys.modules):
+            if is_domain(name):
+                del sys.modules[name]
+        sys.modules.update(saved_modules)
+        sys.path[:] = saved_path
     return mod
 
 

@@ -12,12 +12,33 @@ are never printed or logged.
   uv run runner.py --game 0     play game 0 now (test round, stores nothing)
   flags: --dry (no PUT), --no-llm (rules only)
 """
-import argparse, datetime as dt, fcntl, json, logging, math, os, re
-import shutil, socket, statistics, subprocess, sys, threading, time
+import argparse
+import datetime as dt
+import fcntl
+import json
+import logging
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 import requests
+
+from claim_to_fame import pricing
+from claim_to_fame.invoices import (
+    FALLBACK_LINE, FALLBACK_MAX, LINE_END_RE, LINE_RE, STOP_RE, UNIT_RATE, UNITS,
+    header_map, norm_unit, num, parse_items, parse_lines, rule_value,
+)
+from claim_to_fame.pricing import apply_shared_caps, ceil_c, floor_c, pos
+from claim_to_fame.prompts import (
+    AMOUNT_RE, CLAUSE_RE, SCHEMA, SYSTEM, build_prompt, policy_amounts,
+)
 
 ROOT = Path(__file__).resolve().parent
 CASES, OUT = ROOT / "cases", ROOT / "out"
@@ -193,118 +214,6 @@ def read_text(d, pattern):
     return "\n\n".join(p.read_text(errors="replace") for p in hits)
 
 
-def num(s):
-    s = (s or "").strip().replace(" ", "").replace(" ", "")
-    if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
-    elif "," in s:
-        s = s.replace(",", ".")
-    try:
-        return float(s)
-    except ValueError:
-        return 1.0
-
-
-UNITS = (r"flat[ -]?rate|lump[ -]?sum|pcs?\.?|pieces?|hrs?\.?|hours?|h|m2|m²|sqm|m3|m³|lm|rm|m|"
-         r"kg|t|l|days?|weeks?|units?|sets?|km|stk\.?|std\.?|psch\.?|pauschal\w*|stück")
-LINE_RE = re.compile(rf"^\s*(\d{{1,3}})\s+(.+?)\s+(\d+(?:[.,]\d+)?)\s+({UNITS})(?:\s|$)", re.I)
-
-
-def header_map(low):
-    def pick(keys, default):
-        for j, x in enumerate(low):
-            if any(k in x for k in keys):
-                return j
-        return default
-    return (pick(("desc", "item", "service", "leistung"), 1),
-            pick(("amount", "qty", "quant", "menge"), 2),
-            pick(("unit", "einheit"), 3))
-
-
-# Line ends with quantity + unit (TOTAL column is empty): greedy description takes the LAST
-# number+unit, so "Cable 3 m  2 pcs" reads 2 pcs, not 3 m. LINE_RE stays as fallback.
-LINE_END_RE = re.compile(rf"^\s*(\d{{1,3}})\s+(.+)\s+(\d+(?:[.,]\d+)?)\s+({UNITS})\s*$", re.I)
-STOP_RE = re.compile(r"^\s*(created on|page \d|sub-?total\b|total\b|vat\b|net\b|gross\b|invoice\b|items\b|pos\b|from\b)", re.I)
-
-
-def parse_lines(lines):
-    """Item rows plus wrapped description lines (appended to the item above, max 3)."""
-    items, cur, extra = {}, None, 0
-    for ln in lines:
-        m = LINE_END_RE.match(ln) or LINE_RE.match(ln)
-        if m:
-            i = int(m[1])
-            cur, extra = (i, 0) if i not in items else (None, 0)
-            items.setdefault(i, {"description": m[2].strip(), "quantity": num(m[3]), "unit": m[4]})
-        elif cur is not None and ln.strip() and not STOP_RE.match(ln) and extra < 3:
-            items[cur]["description"] += " " + ln.strip()
-            extra += 1
-        else:
-            cur = None
-    return items
-
-
-def parse_items(d):
-    import pdfplumber
-    items, dups, text_lines = {}, [], []
-    for pdf_path in sorted(d.rglob("*.pdf")):
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:                     # ALL pages, ALL stapled invoices
-                text_lines += (page.extract_text() or "").splitlines()
-                for table in page.extract_tables() or []:
-                    cols = (1, 2, 3)
-                    for row in table:
-                        c = [(x or "").replace("\n", " ").strip() for x in row]
-                        low = [x.lower() for x in c]
-                        if low and low[0] in ("pos", "pos.", "#", "no.", "nr.", "item"):
-                            cols = header_map(low)
-                            continue
-                        if len(c) < 3 or not re.fullmatch(r"\d{1,3}", c[0]):
-                            continue
-                        i = int(c[0])
-                        it = {"description": c[cols[0]] if cols[0] < len(c) else "",
-                              "quantity": num(c[cols[1]]) if cols[1] < len(c) else 1.0,
-                              "unit": c[cols[2]] if cols[2] < len(c) else ""}
-                        if i in items:
-                            dups.append(i)
-                        else:
-                            items[i] = it
-    by_text = parse_lines(text_lines)
-    if len(by_text) > len(items):
-        log.warning("table parser found %d lines, text parser %d: using text", len(items), len(by_text))
-        items = by_text
-    if dups:
-        log.error("DUPLICATE POS numbers %s (stapled invoices restart numbering?)", sorted(set(dups)))
-    if not items:
-        raise RuntimeError("no line items parsed")
-    return items
-
-
-# ---------------------------------------------------------------- rule fallback (no LLM)
-# Our own rough gross rates per unit. Used for the provisional submission and when no LLM
-# answer arrives, so a line is never left at the 0/0 default.
-UNIT_RATE = {"hrs": 65.0, "m2": 40.0, "m": 25.0, "m3": 60.0, "pcs": 60.0, "flat rate": 200.0}
-FALLBACK_LINE = 150.0       # unknown unit
-FALLBACK_MAX = 1500.0       # rules alone never charge more than this per line
-
-
-def norm_unit(u):
-    u = u.lower().strip(" .")
-    for key, alts in {"pcs": ("pc", "piece", "stk", "stück", "unit", "set"),
-                      "hrs": ("hr", "hour", "h", "std"),
-                      "flat rate": ("flat", "lump", "psch", "pauschal"),
-                      "m2": ("m²", "sqm", "qm"), "m3": ("m³",), "m": ("lm", "rm", "meter")}.items():
-        if u == key or u.startswith(alts):
-            return key
-    return u
-
-
-def rule_value(it):
-    q = it["quantity"] if it["quantity"] > 0 else 1.0
-    rate = UNIT_RATE.get(norm_unit(it["unit"]))
-    return min(rate * q, FALLBACK_MAX) if rate else FALLBACK_LINE
-
-
 # ---------------------------------------------------------------- OpenAI with key cascade
 class NoKeys(Exception):
     pass
@@ -398,74 +307,6 @@ def llm_call(messages, n, tier, timeout=20.0):
                 raise
 
 
-SCHEMA = {"type": "object", "additionalProperties": False, "required": ["items"], "properties": {
-    "items": {"type": "array", "items": {
-        "type": "object", "additionalProperties": False,
-        "required": ["index", "clause", "covered_prob", "t_if_covered", "stated_value", "stated_cap",
-                     "shared_cap"],
-        "properties": {"index": {"type": "integer"},
-                       "clause": {"type": "string"},          # first: the model reasons before the numbers
-                       "covered_prob": {"type": "number"},
-                       "t_if_covered": {"type": "number"},
-                       "stated_value": {"type": ["number", "null"]},
-                       "stated_cap": {"type": ["number", "null"]},
-                       "shared_cap": {"type": ["number", "null"]}}}}}}
-
-SYSTEM = """You review insurance claims. You get the policy, the damage description and
-the line items of an invoice. For every line, judge as a claims expert would whether it is
-covered by the policy, related to the reported damage, and reasonably priced.
-All amounts are GROSS EUR (incl. 19% VAT) for the WHOLE line, i.e. quantity x unit price,
-never net and never per unit.
-Fields per line:
-- covered_prob: probability (0-1) that the line is both covered and related to this damage.
-- t_if_covered: the highest total a claims expert would still accept for this line if it is
-  covered, at usual German market rates. Always a realistic positive amount, even when
-  covered_prob is low.
-- stated_value: an amount the case documents give for exactly this line, else null.
-- shared_cap: a policy limit that several lines share TOGETHER (per event, in the aggregate,
-  across items, trades or invoices), else null. Give the full limit on every line it applies to
-  and do NOT reduce t_if_covered for it: the code splits it pro rata.
-- stated_cap: a limit for this line ALONE, else null.
-- clause: the policy clause(s) and the rule you apply (short), or "".
-How to get t_if_covered: start from the usual market price of the line, then apply every rule
-the policy states for it: exclusions, proportional reductions (e.g. "one half" when a required
-device or duty was missing, as established by the description), no betterment, uneconomic repair
-(never more than an equivalent new unit), and caps for this line alone.
-- No new-for-old deduction unless the policy pays current or market value.
-- Betterment or upgrade: the original pre-loss standard is owed, a positive amount, not 0.
-- Preventive work or maintenance without confirmed damage is not owed.
-- Values in square brackets such as [amount] or [percentage] are unknown schedule values:
-  never invent a number for them (no guessed deductible).
-- Amounts in the damage description (purchase price, what the repairs came to, "most of it for
-  ...") are hard anchors for the lines they concern.
-Return one entry for every invoice index."""
-
-
-AMOUNT_RE = re.compile(r"(?:EUR|€)\s?\d[\d.,]*|\d[\d.,]*\s?(?:EUR|€)|\d+(?:[.,]\d+)?\s?(?:per ?cent|%)", re.I)
-CLAUSE_RE = re.compile(r"^(\d+(?:\.\d+)+)\s")
-
-
-def policy_amounts(policy, limit=10):
-    """Every paragraph of the policy that states a concrete amount or percentage, with its clause."""
-    out, clause = [], ""
-    for para in re.split(r"\n\s*\n", policy):
-        m = CLAUSE_RE.match(para.strip())
-        clause = m[1] if m else clause
-        if AMOUNT_RE.search(para) and len(out) < limit:
-            out.append(f"[{clause}] " + " ".join(para.split()))
-    return out
-
-
-def build_prompt(policy, desc, items):
-    lines = "\n".join(f"{i} | {it['description']} | {it['quantity']:g} | {it['unit']}"
-                      for i, it in sorted(items.items()))
-    amounts = "\n".join(f"- {x}" for x in policy_amounts(policy)) or "- none"
-    user = f"## POLICY\n{policy}\n\n## DAMAGE DESCRIPTION\n{desc}\n\n" \
-           f"## CONCRETE AMOUNTS IN THE POLICY (extracted by code, check which lines they cap)\n{amounts}\n\n" \
-           f"## INVOICE LINE ITEMS (index | description | quantity | unit)\n{lines}\n"
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
-
-
 def assess(messages, timeout, tier):
     """Returns (list of votes {index: dict}, usage dict). Votes may be fewer than tier.votes."""
     usage = {"prompt": 0, "cached": 0, "completion": 0, "calls": 0}
@@ -515,87 +356,22 @@ def parse_vote(content):
 
 
 # ---------------------------------------------------------------- deterministic pricing
-def floor_c(x):
-    x = float(x) if x is not None else 0.0
-    return math.floor(round(x * 100, 6)) / 100 if math.isfinite(x) and x > 0 else 0.0   # round: float noise
-
-
-def ceil_c(x):
-    x = float(x) if x is not None else 0.0
-    return math.ceil(round(x * 100, 6)) / 100 if math.isfinite(x) and x > 0 else 0.0   # round: float noise
-
-
-def pos(x):
-    try:
-        x = float(x)
-        return x if math.isfinite(x) and x > 0 else None
-    except (TypeError, ValueError):
-        return None
-
-
-def aggregate(votes):
-    """votes for ONE line -> (p, m, stated, cap, shared)."""
-    p = statistics.median(min(max(float(v.get("covered_prob") or 0), 0.0), 1.0) for v in votes)
-    vals = sorted(x for x in (pos(v.get("t_if_covered")) for v in votes) if x)
-    m = 0.0
-    if vals:
-        m = math.exp(statistics.median(math.log(x) for x in vals))
-        # Votes disagree: lean high (geo mean of the two highest). Official payoffs: rejecting
-        # a fair claim costs 1.5a, accepting an inflated one at most min(a, c).
-        if len(vals) >= 2 and vals[-1] / vals[0] >= DISAGREE:
-            m = math.sqrt(vals[-1] * vals[-2])
-
-    def majority(key):                              # only trust a stated value most votes report
-        xs = [x for x in (pos(v.get(key)) for v in votes) if x]
-        return statistics.median(xs) if len(xs) * 2 > len(votes) else None
-    return p, m, majority("stated_value"), majority("stated_cap"), majority("shared_cap")
-
-
-def apply_shared_caps(aggs):
-    """aggs {i: (p, m, stated, cap, shared)} -> same without shared, values scaled pro rata where
-    the lines that share one limit add up to more than it (policy wording: applied rateably)."""
-    groups = {}
-    for i, (p, m, stated, cap, shared) in aggs.items():
-        if shared and p > 0.5:
-            groups.setdefault(round(shared, 2), []).append(i)
-    out = {i: (p, m, stated, cap) for i, (p, m, stated, cap, _) in aggs.items()}
-    for limit, idx in groups.items():
-        total = sum(min(out[i][2] or out[i][1], out[i][3] or math.inf) for i in idx)
-        if total > limit > 0:
-            f = limit / total
-            for i in idx:
-                p, m, stated, cap = out[i]
-                out[i] = (p, m * f, stated * f if stated else stated, cap)
-            log.info("shared cap %.2f on lines %s: sum %.2f -> scale %.3f", limit, idx, total, f)
-    return out
-
-
-# a and b relative to m (our median of t), from the official payoff table:
-# - accepting an incoming a pays off iff P(t >= a) > 2/3, so b = the point where
-#   p * P(T >= b) = 2/3 with T ~ m * exp(SIGMA * Z); b = 0 if p <= 2/3.
-# - charging: a * P(t >= a) peaks below m; a = A_MULT * m. 0.85 from the backtest on games 1-2
-#   (notes/DECISIONS.md): our LLM estimate m tends to sit slightly above t.
+# Keep the runner's public helpers and mutable settings compatible with offline tools.
+# Domain functions take settings explicitly, so they can also be used without a runner.
 A_MULT = float(os.environ.get("A_MULT", "0.85"))
 SIGMA = float(os.environ.get("SIGMA", "0.35"))
 
 
+def aggregate(votes):
+    return pricing.aggregate(votes, disagree=DISAGREE)
+
+
 def b_mult(p):
-    if p <= 2 / 3:
-        return 0.0
-    return math.exp(SIGMA * statistics.NormalDist().inv_cdf(max(1e-6, 1 - 2 / (3 * p))))
+    return pricing.b_mult(p, sigma=SIGMA)
 
 
 def price(p, m, stated, cap, fallback):
-    if stated:
-        a = stated
-        b = stated if p > 2 / 3 else 0.0
-    else:
-        base = m if m > 0 else fallback             # t = 0 lines still charge: costs nothing if rejected
-        a = A_MULT * base
-        b = b_mult(p) * base
-    if cap:
-        a, b = min(a, cap), min(b, cap)
-    return floor_c(a), ceil_c(b)
+    return pricing.price(p, m, stated, cap, fallback, a_mult=A_MULT, sigma=SIGMA)
 
 
 # ---------------------------------------------------------------- one round
