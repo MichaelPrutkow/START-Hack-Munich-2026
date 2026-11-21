@@ -150,6 +150,44 @@ class RecallHiCapTests(unittest.TestCase):
         self.assertEqual(caps[1]["cap"], 625.0)
 
 
+class RecallSafeguardTests(unittest.TestCase):
+    """Units must match, a known-fair level is a floor, contradictory evidence sets no cap."""
+
+    def memory(self, *entries):
+        return [(g, {1: (recall.tokens(desc), q, u, t)}) for g, desc, q, u, t in entries]
+
+    def test_unit_mismatch_is_not_evidence(self):
+        mem = self.memory((1, "paint wall", 10.0, "m2", (100.0, 120.0)))
+        self.assertIsNone(recall.recall_line({"description": "paint wall", "quantity": 1, "unit": "flat rate"}, mem))
+
+    def test_single_lump_items_are_comparable(self):
+        mem = self.memory((1, "vehicle costs", 1.0, "pcs", (0.0, 20.0)))
+        lo, hi, _ = recall.recall_line({"description": "vehicle costs", "quantity": 1, "unit": "flat rate"}, mem)
+        self.assertEqual((lo, hi), (0.0, 20.0))
+        self.assertIsNone(recall.recall_line({"description": "vehicle costs", "quantity": 2, "unit": "flat rate"}, mem))
+
+    def test_cap_never_below_known_fair_level(self):
+        self.assertEqual(recall.hi_cap_from(100.0, lo=98.0), 98.0)
+        self.assertEqual(recall.hi_cap_from(100.0, lo=50.0), 95.0)
+
+    def test_contradictory_evidence_sets_no_hi_cap(self):
+        self.assertFalse(recall.consistent([{"t": [390.0, 450.0]}, {"t": [0.0, 336.0]}]))
+        self.assertTrue(recall.consistent([{"t": [517.0, 616.0]}, {"t": [586.0, 602.0]}]))
+        self.assertTrue(recall.consistent([{"t": [300.0, None]}]))
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            recall._CACHE.clear()
+            low = [dict(x, amount=x["amount"] * 0.5) for x in tv_transactions()]   # t in [300, 325)
+            with patch.object(recall, "parse_items", side_effect=fake_parse):
+                write_game(root, 3, "P", {"1": {"description": "TV set", "quantity": 1, "unit": "pcs"}},
+                           tv_transactions())                                      # t in [600, 650)
+                write_game(root, 4, "P", {"1": {"description": "TV set", "quantity": 1, "unit": "pcs"}}, low)
+                caps = recall.caps_for(5, {1: {"description": "TV set", "quantity": 1, "unit": "pcs"}}, "P",
+                                       root / "cases", root / "leaderboard", "us")
+        self.assertFalse(caps[1]["consistent"])
+        self.assertIsNone(caps[1]["cap_hi"])
+
+
 class RecallRuntimeTests(test_runtime.RuntimeTests):
     """play_game applies the cap only with RECALL_CAP=1 and always records the evidence."""
 

@@ -24,6 +24,7 @@ from .pricing import floor_c
 
 THETA = 0.3
 HI_FRAC = 0.95      # mode "2": a and b stay below 0.95 x the lowest recalled unfair level
+LUMP = {"pcs", "flat rate"}
 STOP = set("and the of from for with incl including into in on at to an by per its this that "
            "after before or is are be as".split())
 _CACHE: dict = {}
@@ -96,7 +97,12 @@ def recall_line(item, memory, theta=THETA):
             s = similarity(tok, mtok)
             if s < theta:
                 continue
-            f = qty / mqty if (munit == unit and mqty > 0) else 1.0
+            if munit == unit and mqty > 0:
+                f = qty / mqty
+            elif {munit, unit} <= LUMP and qty == 1 and mqty == 1:
+                f = 1.0                         # one lump item either way ("1 pcs" vs "1 flat rate")
+            else:
+                continue                        # no safe conversion between units: not evidence
             hits.append((s, gid, j, lo * f, hi * f))
     if not hits:
         return None
@@ -122,15 +128,26 @@ def loose_cap_from(lo, hi, minimum=20.0):
     return None
 
 
-def hi_cap_from(hi, frac=HI_FRAC):
+def hi_cap_from(hi, frac=HI_FRAC, lo=0.0):
     """Mode "2": a known-unfair level (finite hi), one- or two-sided, caps a AND b.
 
+    Never below a recalled known-fair level lo: max(lo, frac * hi). An earlier unfair claim does
+    not make 0.95 x of it fair; the cap only keeps us clearly below a level shown to be too high.
     Replay G1-18 (score_submission, A_MULT 0.68, opponents fixed): midpoint cap on a only
     +0.3k, 0.95*hi on a only +1.6k, 0.95*hi on a and b +4.9k; positive in G1-10 and G11-18.
     """
     if math.isfinite(hi) and hi > 0:
-        return floor_c(frac * hi)
+        return floor_c(max(frac * hi, lo if 0 < lo < hi else 0.0))
     return None
+
+
+def consistent(matches):
+    """True when all recalled intervals overlap (max lo < min hi)."""
+    if not matches:
+        return False
+    lo = max(m["t"][0] for m in matches)
+    his = [m["t"][1] for m in matches if m["t"][1] is not None]
+    return not his or lo < min(his)
 
 
 def caps_for(gid, items, policy, cases_dir, cache_dir, team, *, theta=THETA):
@@ -147,7 +164,9 @@ def caps_for(gid, items, policy, cases_dir, cache_dir, team, *, theta=THETA):
         if not r:
             continue
         lo, hi, matches = r
-        out[i] = {"cap": cap_from(lo, hi), "cap_loose": loose_cap_from(lo, hi), "cap_hi": hi_cap_from(hi),
+        agree = consistent(matches)
+        out[i] = {"cap": cap_from(lo, hi), "cap_loose": loose_cap_from(lo, hi),
+                  "cap_hi": hi_cap_from(hi, lo=lo) if agree else None, "consistent": agree,
                   "t": [round(lo, 2), _finite_or_none(hi)], "matches": matches}
     return out
 
