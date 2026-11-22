@@ -1,8 +1,0 @@
-[project]
-name = "claim-to-fame-runner"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = ["requests", "openai", "pdfplumber", "pyzipper"]
-
-[tool.uv]
-package = false
