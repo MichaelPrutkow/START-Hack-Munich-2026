@@ -34,6 +34,37 @@ class DomainTests(unittest.TestCase):
         assert (it[1]["quantity"], it[1]["unit"]) == (2.0, "pcs")
         assert (it[2]["quantity"], it[2]["unit"]) == (3.0, "pcs")
 
+    def test_rows_with_unusual_units_are_kept(self):
+        # Real rows from G20, G30, G31, G41, G46, G50 that were glued onto the line above.
+        it = R.parse_lines([
+            "13 Babel Boulevard Main Street 1",
+            "1 Translation from Spanish to English 68 lines",
+            "2 Material costs 1 pcs",
+            "88 Cheque Chase Road Main Street 1",
+            "3 Wall tiles 1000x5000 5 pcs",
+            "4 Silicone joints 3.6 linear m",
+            "5 Technical drying (large-area, cavity and borehole) incl. 1 flat rate",
+            "labour, dust protection and kitchen disinfection",
+            "6 Electricity for drying equipment (separately metered) 2,412.1 kWh",
+            "7 Impound release / storage fee paid to recover bicycle 1 –",
+        ])
+        assert sorted(it) == [1, 2, 3, 4, 5, 6, 7], it
+        assert (it[1]["quantity"], it[1]["unit"]) == (68.0, "lines")
+        assert it[3] == {"description": "Wall tiles 1000x5000", "quantity": 5.0, "unit": "pcs"}
+        assert it[4] == {"description": "Silicone joints", "quantity": 3.6, "unit": "linear m"}
+        assert it[5]["description"].endswith("kitchen disinfection")
+        assert (it[6]["description"], it[6]["quantity"], it[6]["unit"]) == \
+            ("Electricity for drying equipment (separately metered)", 2412.1, "kWh")
+        assert (it[7]["quantity"], it[7]["unit"]) == (1.0, "–")
+
+    def test_unusual_unit_only_for_next_position(self):
+        # an address or a restarted numbering must not create or overwrite a position
+        it = R.parse_lines(["1 Vehicle costs 1 pcs", "4 Trickle Terrace Main Street 1",
+                            "5 Something odd 2 lines", "2 Shipping 1 –"])
+        assert sorted(it) == [1, 2], it
+        assert it[1]["description"] == "Vehicle costs 4 Trickle Terrace Main Street 1 5 Something odd 2 lines"
+        assert (it[2]["description"], it[2]["unit"]) == ("Shipping", "–")
+
     def test_real_case0_pdf(self):
         d = R.OUT / "cases" / "case_000"
         if not (d / "invoices.pdf").exists():

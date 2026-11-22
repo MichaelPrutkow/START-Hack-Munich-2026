@@ -37,6 +37,11 @@ def header_map(low):
 # number+unit, so "Cable 3 m  2 pcs" reads 2 pcs, not 3 m. LINE_RE stays as fallback.
 LINE_END_RE = re.compile(rf"^\s*(\d{{1,3}})\s+(.+)\s+(\d+(?:[.,]\d+)?)\s+({UNITS})\s*$", re.I)
 STOP_RE = re.compile(r"^\s*(created on|page \d|sub-?total\b|total\b|vat\b|net\b|gross\b|invoice\b|items\b|pos\b|from\b)", re.I)
+# A row whose unit is not in UNITS ("–", "linear m", "kWh", "lines") was glued onto the item
+# above, so its position was never submitted (counts as 0/0: G20, G30, G31, G41, G46, G50).
+# Accepted only for the NEXT position number and only when the row ends with quantity + a short
+# unit word or a dash; address lines such as "4 Trickle Terrace Main Street 1" never match.
+ANY_UNIT_RE = re.compile(r"^\s*(\d{1,3})\s+(.+?)\s+(\d[\d.,]*)\s+([^\W\d_]{1,12}(?:\s[^\W\d_]{1,12})?|[–—-])\s*$")
 
 
 def parse_lines(lines):
@@ -44,6 +49,10 @@ def parse_lines(lines):
     items, cur, extra = {}, None, 0
     for ln in lines:
         m = LINE_END_RE.match(ln) or LINE_RE.match(ln)
+        if not m:
+            odd = ANY_UNIT_RE.match(ln)
+            if odd and int(odd[1]) == max(items, default=0) + 1:
+                m = odd
         if m:
             i = int(m[1])
             cur, extra = (i, 0) if i not in items else (None, 0)
