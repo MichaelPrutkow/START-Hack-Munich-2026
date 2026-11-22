@@ -30,7 +30,7 @@ Das sind überwiegend Empfehlungen des internen Briefings. Offiziell zählen Ran
 
 - Abgelehnte **faire** Forderungen zahlen im November **1,5 × a**; daher `a = amount / 1,5` bei positiver Ablehnungszahlung. Die August-Aussagen auf S.6/13 des Team-Briefings passen nicht zu Game Description S.2 und Deep Dive S.4.
 - Einseitige Preisgrenzen bleiben zensiert. Keine Ersetzung durch `1,35–1,6 × Untergrenze` aus dem internen Papier.
-- Keine August-Preisanker, keine unbelegte Dreifachgewichtung später Runden, keine Übernahme historischer Gewinnbehauptungen.
+- Keine unbelegte Dreifachgewichtung später Runden, keine Übernahme historischer Gewinnbehauptungen.
 - Das offizielle Write-up hat **höchstens eine Seite**, nicht ein bis zwei (Game Description S.4; Evaluation Criteria S.1).
 
 Die Änderungen werden ausschließlich offline mit synthetischen Abgaben, gefälschten HTTP-Antworten und lokalen Dateien geprüft. Der Live-Runner und die aktuellen Rundenlogs liegen weiterhin bei Philip; nur dort lässt sich prüfen, welche Parameter nach genügend passenden November-Runden tatsächlich aktiv werden.

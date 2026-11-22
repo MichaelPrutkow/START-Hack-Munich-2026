@@ -94,11 +94,12 @@ Validation and live application require matching model/prompt/estimator identiti
 
 Changing the price defaults, log messages, or an unrelated model tier no longer resets another tier's history. Calibrated observations may be reused only when the recorded raw estimate and applied parameters reproduce the actual submission; bias is never compounded. Capped, stated-amount and experimental uncertainty-adjusted lines remain outside parameter fitting/application. Stale, malformed, future-game or unreconciled data are ignored. `learn.py --status` now shows historical training counts, actual train/holdout game IDs and exclusion reasons, alongside proposed/active parameters. Artifact schema 3 is rebuilt automatically from the existing logs and caches.
 
-Recall supplies whole-line fair-price **ranges** only for similar descriptions with the same policy, quantity and unit. It is not a market unit-rate lookup and never copies old coverage into a new case. No August records are used. Old successful logs may recover a complete explicitly recorded winning tier, subject to settlement reconciliation. Partial or ambiguous submissions stay excluded. Missing model/prompt identities remain visible in the historical training provenance. Public payments alone are never converted into invented internal model estimates.
+Recall supplies whole-line fair-price **ranges** from our own completed rounds. Numerical corrections require matching policy, quantity and unit; broader comparisons are labelled as hypotheses and cannot establish current coverage or price bounds. It is not a market unit-rate lookup and never copies old coverage into a new case. Old successful logs may recover a complete explicitly recorded winning tier, subject to settlement reconciliation. Partial or ambiguous submissions stay excluded. Missing model/prompt identities remain visible in the historical training provenance. Public payments alone are never converted into invented internal model estimates.
 
 Michael's per-game `.env` refresh and `view_rounds.py` are retained. Manual changes to `A_MULT`, `SIGMA`, `DISAGREE` and `AUTO_TUNE` take effect before the next scheduled round without restarting. `AUTO_TUNE=0` pins manual price defaults; `LEARNING_AUTO=0` independently disables the background downloader. The older `tune.py` remains an exploratory analysis tool: it imputes unknown prices and selects and compares settings on the same data. Its `out/params.json` proposals no longer bypass validation or compete with `learning.json` for live prices. The wider field-search ranges are integrated into the single validated learner above. Its replay now scores every setting with `calibrate.score_submission` bounds (unknown limits, fairness and the payment cap stay ranges) and checks the step it would propose itself: midpoint gain, worst case not lower, 2 of 3 periods, still a gain without the best game.
 
 **Recall caps (`claim_to_fame/recall.py`, `RECALL_CAP`).** Cases repeat with the identical policy text and reworded invoices (games 1/9/15, 2/6, 3/11/14, 8/10/13). Before pricing, the runner looks up lines of earlier games with the same policy text and a similar description (word overlap ≥ 0.3, quantity-scaled for equal units) in the local `out/cases/` and `out/leaderboard/` files. `RECALL_CAP=2` (default since 21.11. 18:45) caps both `a` and `b` at 0.95 × the lowest recalled unfair level (`cap_hi`), whether or not a fair level is known; neither is ever raised (replay G1–18 with A_MULT 0.68: +4.9k over no recall, positive in G1–10 and G11–18; the old midpoint cap on `a` alone: +0.3k). `1` keeps the old two-sided midpoint cap on `a`, `loose` adds the one-sided one, `shadow` only logs `recall` in the round record and `recall_cap`/`recall_cap_hi` per line, `0` is off. The mode is read from `.env` every game. Capped lines no longer reproduce the logged pricing parameters and therefore drop out of parameter fitting.
+
 
 **Shadow variants (logged, never sent).** Every round record carries `commit`, `confirmed` (stages the server echoed) and `shadow`: the final submission with `a` × 0.80 on all LLM lines (`a80_all`), `a` × 0.80 only on quantity-1 lines without a document amount (`a80_uncertain`) and `b ≤ 0.80 a` (`b_le_80pct_a`). Defined before game 15 from the external review; `uv run tune.py --shadow` scores them against what was actually sent once those games are settled. Decide after 3–5 games, and once without the best game.
 
@@ -108,7 +109,7 @@ New raw votes, actual submitted prices, per-line sources and model/prompt/config
 
 Pull the update and restart **only Philip's runner**, between game windows. API-key code is unchanged. Keep the previous checkout available for rollback. Learning starts automatically; `LEARNING_AUTO=0` disables background refresh. `FOCUS_ENABLED=0` disables the optional follow-up call; keep `PRICING_UNCERTAINTY=0` until a chronological comparison supports enabling it. This update never overwrites `.env`.
 
-The briefing audit, implemented gaps and remaining experiments are documented in [`notes/BRIEFING_ALIGNMENT.md`](notes/BRIEFING_ALIGNMENT.md). The internal preparation briefing contains August rules; official November rules take precedence.
+The briefing audit, implemented gaps and remaining experiments are documented in [`notes/BRIEFING_ALIGNMENT.md`](notes/BRIEFING_ALIGNMENT.md). Official tournament rules take precedence over historical material.
 
 The one-page submission text and three-minute pitch with Q&A are in [`writeup/ONE_PAGE.md`](writeup/ONE_PAGE.md) and [`writeup/PITCH.md`](writeup/PITCH.md). Their game-8 numbers are a dated snapshot, not final standings.
 
@@ -129,6 +130,8 @@ If Deep frequently finishes late, a latency-first trial is `DEEP_REASONING=mediu
 | `claim_to_fame/feedback.py`, `learn.py` | Settlement reconciliation, loss bounds, calibration, contextual recall and private artifacts. |
 | `claim_to_fame/learning_service.py`, `legacy.py` | Bounded background refresh and strict recovery of old complete submission logs. |
 | `claim_to_fame/tuning.py`, `tune.py` | Exploratory historical field replay; proposals are not applied by the runner. |
+| `claim_to_fame/price_memory.py`, `price_research.py` | Comparable-item and category learning from own reconciled rounds, with chronological validation. |
+| `research_prices.py` | Opt-in paired reassessment of completed local cases; planning makes no model calls. |
 | `tests/` | Offline domain, round orchestration and historical-import regression tests. |
 | `test_runner.py` | Runs the entire offline suite using Python's standard-library `unittest`. |
 
@@ -307,3 +310,5 @@ gehen in den gepaarten Vergleich ein, Training und Prüfspiele werden getrennt b
 Ergebnisse liegen privat in `out/price-experiments.json`. Prüfspiele nicht zur Auswahl
 neuer Promptregeln verwenden. Wiederholte Experimente auf denselben Fällen sind keine
 unabhängige Bestätigung.
+
+Live-Bewertungen verwenden ein kompaktes Kategoriefeld statt einer ausführlichen Kostenaufstellung. Die Kategorie braucht eine Stimmenmehrheit; fehlende oder widersprüchliche Kategorien bleiben unbekannt.

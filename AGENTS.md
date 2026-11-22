@@ -80,6 +80,8 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 | 23 | Deep-Zeitbudget, Fehlerdiagnose und lokales Latenzprofil | [X] | fertig | `runner.py`, `tests/test_runtime.py`, `.env`, `.env.example`, `README.md`, `AGENTS.md` |
 | 24 | Handanalyse G1–18, Recall-Modus 2 (a und b), Prompt-Hinweise | [C] | review | `claim_to_fame/recall.py`, `runner.py`, `tests/test_recall.py`, `claim_to_fame/prompts.py`, `.env.example`, `README.md`, `notes/DECISIONS.md` |
 
+| 25 | Parser, kompakte Bewertung und Lernen aus eigenen Runden integrieren | [X] | review | Runner, Preis-/Lernmodule, Tests, Dokumentation |
+
 ## Offene Fragen
 
 - [x] Historische Lernbasis trotz fehlender Versionskennungen: User beauftragt die Korrektur und Integration von Michaels neuem Push ausdrücklich. [X] übernimmt `feedback.py`, `learn.py`, Tests und Dokumentation im isolierten Klon auf `38d93fb`; Status fertig, offline geprüft. Kein Live-Runner.
@@ -88,8 +90,8 @@ Erste Runde Sa 14:00, dann alle 13 min bis So 12:00 (≈ 101 Runden). Write-up/A
 - [ ] Zählen späte Runden mehrfach (August: letzte 20 dreifach)? → Orga/Discord fragen. [X]
 - [ ] Höhe der absoluten Untergrenze von `c`. [X]
 - [x] Bearbeitung von `calibrate.py` trotz laufender [C]-Aufgabe: User beauftragt am 21.11. alle vorgeschlagenen Verbesserungen; [X/eval] korrigiert Evaluation, bestehende Kalibrierung bleibt kompatibel. [X]
-- [ ] Dürfen August-Preisanker und automatisiert gelesene Leaderboard-Transaktionen genutzt werden? → Orga fragen. [X]
-  - ✓ Leaderboard: Scrapen erlaubt, nur nicht im Millisekundentakt (Orga, mündlich an Michael, 21.11. 14:11). August-Daten: weiter nicht nutzen (Michaels Regel). [U/C]
+- [ ] Dürfen automatisiert gelesene Leaderboard-Transaktionen genutzt werden? → Orga fragen. [X]
+  - ✓ Leaderboard: Scrapen erlaubt, nur nicht im Millisekundentakt (Orga, mündlich an Michael, 21.11. 14:11). [U/C]
 - [ ] Format und genaue Frist des Write-ups (max. 1 Seite). [X]
 - [x] Wer ist der eine Runner? → Philips Mac. Auf keinem anderen Rechner `runner.py` starten (auch nicht `--game`), sonst zwei Abgaben. [U]
 - [ ] Ist `MichaelPrutkow/START-Hack-Munich-2026` privat? Falldaten dürfen nicht öffentlich werden. [C]
@@ -106,7 +108,7 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 | Quellenverzeichnis und historische Repos | `00_Quellen_Repos.md` |
 | August-Spielregeln, API-Fallen und Mathematik | `01_Regeln_Auszahlung_Ablauf.md`, `02_API_Datenformat_Fallen.md`, `03_Mathematik_Strategie.md` |
 | Abrechnung, Kalibrierung und Recall | `04_Leaderboard_Klammern_Recall.md`. Verfügbarkeit und Spielregeln für die Nutzung der betreffenden Daten im November prüfen. |
-| Historische Teamresultate, Fehler und Preisanker | `05_Ergebnisse_Teams_August.md`, `06_Learnings_Fehlerkatalog.md`, `07_Fachwissen_Preisanker.md`, `preisanker_august.csv` |
+| Historische Fehleranalysen | `06_Learnings_Fehlerkatalog.md` |
 | Pipeline, Prompt und ungetestetes Python-Skelett | `08_Architektur_Prompt_Code.md` |
 | Pitch und Write-up | `09_Bewertung_Pitch_Writeup.md`, für die aktuellen Vorgaben zusätzlich `offiziell/Evaluation_Criteria.md` |
 
@@ -116,7 +118,7 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Die Folien nennen Samstag, 21.11., 14:00 Uhr bis Sonntag, 22.11., 12:00 Uhr (München), im 13-Minuten-Takt. Jede Runde erlaubt 60 Sekunden. Die letzte rechtzeitige Abgabe zählt. Fehlende Positionen erhalten `a = b = 0`. Die offizielle Rundenliste liefert die Startzeiten.
 - Team-API laut Folien: `GET /api/games/list`, `GET /api/games/{id}/key` ab Rundenstart und `PUT /api/games/{id}/submissions` mit `X-API-Key` und einer Liste von Objekten mit `index`, `charge_price`, `acceptance_limit`. Spiel 0 validiert das Abgabeformat und speichert nichts. Case-Zips aus dem geteilten Drive enthalten Police, Schadenbeschreibung, Rechnung und ggf. Bilder. Die Game Description nennt `starter_script.py`, `pixi.toml` und `API_HANDBOOK.md`. Diese Dateien und die Case-Zips waren im übergebenen Ordner nicht vorhanden.
 - 70 Punkte werden linear nach Rang im kumulierten Nettoergebnis vergeben, vom ersten Platz mit 70 bis zum letzten mit 0. Die Jury vergibt bis zu 30 Punkte für Methode und Unsicherheit, Belege für Entscheidungen, sparsamen Ressourceneinsatz, zuverlässige Automatisierung sowie Klarheit und Ehrlichkeit. Write-up höchstens eine Seite, fällig kurz vor Turnierende, ergänzt durch einen Pitch.
-- Laut Fair Play bleiben Strategie, Fallanalyse und Schlüssel im Team. Nutzt die vorgesehenen API-Endpunkte und Freigabezeiten. Klärt mit der Orga die Nutzung historischer Preisanker und automatisierter Transaktionsdaten. Gewichtung später Runden sowie genaue Write-up-Frist und Abgabeformat sind offen.
+- Laut Fair Play bleiben Strategie, Fallanalyse und Schlüssel im Team. Nutzt die vorgesehenen API-Endpunkte und Freigabezeiten. Klärt mit der Orga die Nutzung automatisierter Transaktionsdaten. Gewichtung später Runden sowie genaue Write-up-Frist und Abgabeformat sind offen.
 
 ## Technische Schlüsse für spätere Aufgaben
 
@@ -349,7 +351,7 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 
 ### 21.11.2026 · Codex · Preisbegründung und Modellauswahl (in Arbeit)
 - Nutzer beauftragt algorithmische Verbesserungen nach G38-Logs. [X] übernimmt runner.py, prompts.py, pricing.py, neues assessment.py, parameter_grid.py, decision_review.py, zugehörige Tests und README. Strukturierte Preisaufstellung/Erstattungsanteil, Focus ohne vorherige Preisvorgaben, dokumentierte Schutzregel bei großen Stufenwechseln, gruppierte Diagnosen und chronologischer Grid-Rücktest. Keine Live-Abgaben, keine .env-Änderung. Prüfungen synthetisch/offline; Gewinnwirkung noch unbewiesen.
-- Fertig: Neues assessment.py prüft Komponenten × Anteil (mit Zeilenlimit, ohne doppelte Shared-Cap-Anwendung); alte Stimmen ohne Aufstellung bleiben lesbar. Preisabweichung > Faktor 1,15 braucht unabhängigen Focus mit konsistenter Aufstellung. Gleiche Stimmen erhalten keinen Anzahlbonus. Auswahlgründe und bestätigte Veröffentlichung werden protokolliert, view_rounds zeigt Diagnosen. Focus sieht Originale/vollständige Rechnung, keine alten Modellpreise oder historischen Preisanker; keine zusätzlichen Modellaufrufe gegenüber bestehender Focus-Konfiguration. Aufstellungen können Output-Tokens/Latenz erhöhen.
+- Fertig: Neues assessment.py prüft Komponenten × Anteil (mit Zeilenlimit, ohne doppelte Shared-Cap-Anwendung); alte Stimmen ohne Aufstellung bleiben lesbar. Preisabweichung > Faktor 1,15 braucht unabhängigen Focus mit konsistenter Aufstellung. Gleiche Stimmen erhalten keinen Anzahlbonus. Auswahlgründe und bestätigte Veröffentlichung werden protokolliert, view_rounds zeigt Diagnosen. Focus sieht Originale/vollständige Rechnung, keine alten Modellpreise oder historischen Vergleichspreise; keine zusätzlichen Modellaufrufe gegenüber bestehender Focus-Konfiguration. Aufstellungen können Output-Tokens/Latenz erhöhen.
 - Gruppierte Preisfehler sind zunächst ausschließlich deskriptiv (keine automatischen Kategorie-Faktoren). Neues historisches Walk-forward im Grid wählt nur mit mindestens fünf früheren auswertbaren Spielen aus dem festen Raster; keine spätere Ergebnis- oder Parameter-Leakage. Benutzerpreise A_MULT/SIGMA bleiben unverändert. Neue Prompt-/Konfigurationskennungen verhindern ungeprüfte Wiederverwendung alter Kalibrierungen.
 - Verifikation: 223 Offline-Tests, 222 bestanden, 1 mangels Case-0-PDF übersprungen; diff --check sauber. Neu: p/Anteil nicht doppelt, Rechenfehler verwerfen, Null/Altantworten kompatibel, striktes Schema, Preise aus Focus-Kontext ausgeschlossen, unabhängige Korrektur, gescheiterter Focus erhält bestätigte Fast-Abgabe, geteilte Limits/Deadline-Regressionssuite, chronologische Wahl unabhängig von Testspiel. Remote erneut abgeglichen, keine weiteren Commits. Kein API-/LLM-Aufruf und kein Live-Runner gestartet.
 - Einsatz: Philip stoppt zwischen Runden, pullt und startet genau einen Runner neu. Danach neue Auswahlgründe/Valuation-Audits in view_rounds und chronologischen Lernbericht beobachten. Schutzschwelle ist eine unvalidierte Heuristik: richtige spätere Korrekturen können bei fehlender Nachprüfung zurückgehalten werden. Kein behaupteter Live-Gewinnnachweis.
@@ -360,3 +362,13 @@ Die beigefügten Quellen liegen auf diesem Mac unter `~/Downloads/starthack 2/`.
 - Automatisch in feedback/learning_service integriert, Ausgabe in learn.py, Lernbericht/-JSON und Runner-Log. Historisches Walk-forward: Auswahl aus mindestens fünf früheren Spielen, Quelle auf mindestens drei früheren Spielen vorhanden; spätere Ergebnisse beeinflussen die Auswahl nicht. Keine neue m-Strategie wird live aktiviert. Identische Daten/Code/Suchräume werden per Fingerabdruck wiederverwendet; alle Schleifen unter bestehender Deadline.
 - Verifikation: 233 Offline-Tests, 232 bestanden, 1 fehlende Case-0-PDF übersprungen. Neu geprüft: tatsächliche Baseline exakt, bekannte synthetische Auszahlungen innerhalb Rundungstoleranz, keine Input-Mutation, Anteil-/Limit-Kompatibilität, Quellenabdeckung, Deadlines, Fenster, zeitliche Trennung, State-/Report-Rundlauf und Cache-Invalidierung. Benchmark 20×20 Positionen mit allen Quellen: ca. 1,4 s, JSON ca. 0,43 MB, Wiederverwendung ca. 0,005 s. Kein Live-Runner oder Modellaufruf.
 - Offener empirischer Schritt: auf Philips Rechner nach Pull/Neustart echte Logs auswerten (`uv run learn.py` bzw. automatischer Refresh). Forschung ist noch keine validierte Gewinnverbesserung, falsche Marktpreise/fehlende Abrechnungen werden durch Wiederholungen nicht automatisch genauer. API-Neubewertungen alter Fälle bleiben explizite Experimente.
+
+### 22.11.2026 · Codex · Parser, kompakte Bewertung und eigene Lerndaten
+- Nutzer beauftragt Wiederaufnahme der späteren allgemeinen Verbesserungen auf ef2956b. Bestehende Historie bleibt unverändert. Die nachträgliche Nutzerpräferenz ist eine getrennte Übernahme mit ursprünglichen Autor-Daten. Nutzer verlangt Vorschau der Historie und ausdrückliche Rückfrage vor Push; Push bleibt bis dahin ausgesetzt.
+- Parser für ungewöhnliche Einheiten, kompakter Bewertungs-/Focus-Pfad, Lernkorrekturen aus eigenen abgeglichenen Runden und begrenztes Offline-Experimentwerkzeug integriert. Kategoriefeld mit Mehrheitsprüfung statt ausführlicher Kostenaufstellung; dokumentierte Beträge und Limits bleiben vorrangig. Bestehender Recall, Parametervergleich und Schätzerforschung bleiben erhalten.
+- Neue Lernkorrekturen benötigen zeitlich getrennte Belege je Modell/Prompt/Konfiguration. Forschung startet Modellaufrufe nur mit explizitem --run. Keine neuen Abhängigkeiten, keine .env-Änderung, keine externen Datensätze übernommen.
+- Verifikation: 247 Offline-Tests, 246 bestanden, 1 mangels Case-0-PDF übersprungen; diff --check sauber. Geprüft sind Parser, Kategorieabstimmung, eigene Vergleichsfälle, chronologische Validierung, Caps, Fristen, Fallbacks und Lernartefakte. Kein Live-Runner/Modellaufruf; tatsächliche Modelllatenz nicht neu gemessen.
+
+### 22.11.2026 · Codex · Übernahmen nach Herkunft getrennt
+- Nutzer wünscht einzelne Commits mit den ursprünglichen Autor-Daten. Drei angepasste Übernahmen aus a16bb4e (21.11. 23:35), 8cff6a2 (21.11. 23:37) und cc08210 (22.11. 01:32), jeweils Europe/Berlin. Autoren bleiben erhalten; Committer-Zeit und Hashes sind neu. Neue Integration (kompaktes Kategoriefeld, Tests und Dokumentation) erhält das heutige Autor-Datum.
+- Endgültiger Code identisch zum bereits geprüften f606472; nur diese Übergabe wurde ergänzt. Die vorherigen 60 Commits bleiben erhalten, anschließend vier neue Commits. Push wartet weiterhin auf Nutzerfreigabe nach Vorschau.

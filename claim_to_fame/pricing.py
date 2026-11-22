@@ -5,6 +5,8 @@ import statistics
 from collections import Counter
 from collections.abc import Mapping
 
+CATEGORIES = ("equipment", "labour", "material", "accessory", "ancillary", "other")
+
 log = logging.getLogger("c2f")
 
 
@@ -109,7 +111,12 @@ def estimate_votes(votes, *, disagree=1.5):
         reasons.append("document_anchor_disagreement")
     clauses = list(dict.fromkeys(v["clause"].strip() for v, _, _ in valid
                                 if isinstance(v.get("clause"), str) and v["clause"].strip()))
+    categories = Counter(v.get("category") for v, _, _ in valid
+                         if isinstance(v.get("category"), str) and v.get("category") in CATEGORIES)
+    category, support = categories.most_common(1)[0] if categories else ("unknown", 0)
+    category = category if support * 2 > len(valid) else "unknown"
     return {"p": statistics.median(probabilities) if probabilities else 0.0, "m": m,
+            "valuation_category": category,
             **anchors, "log_spread": spread, "log_range": log_range, "p_spread": p_spread,
             "vote_count": len(votes), "valid_count": len(valid), "invalid_count": len(votes) - len(valid),
             "clauses": clauses, "anchor_validity": validity,

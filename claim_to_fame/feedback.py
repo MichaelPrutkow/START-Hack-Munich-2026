@@ -536,7 +536,7 @@ def build_state(rounds_path, cache_dir, team, *, before_game=None, now=None, pre
                 "calibrated_observations": sum(r["calibration_applied"] for rows in cohorts.values() for r in rows),
                 "recovered_legacy_games": sum(g["legacy_recovered"] for g in reports)},
             "field_behavior": _field_summary(reports),
-            "method": "completed settlement bounds; no exact hidden t; no August data",
+            "method": "completed settlement bounds; no exact hidden t",
             "summary": _summarize(all_rows), "reports": reports,
             "by_tier": {tier: _summarize([r for r in all_rows if r["tier"] == tier])
                         for tier in sorted({r["tier"] for r in all_rows})},

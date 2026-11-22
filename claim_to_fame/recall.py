@@ -1,4 +1,4 @@
-"""Recall caps from our own settled November games (no August data, no network).
+"""Recall caps from our own settled November games (no network).
 
 Cases repeat with the identical policy text and reworded invoices (for example the
 surge-damaged speaker and TV under the same policy in games 1, 9 and 15). For a line

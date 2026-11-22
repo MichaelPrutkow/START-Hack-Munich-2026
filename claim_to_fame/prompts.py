@@ -16,12 +16,18 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["items"]
                        "stated_cap": {"type": ["number", "null"]},
                        "shared_cap": {"type": ["number", "null"]}}}}}}
 
+# A single category label supports own-round learning without a detailed cost breakdown.
+from .pricing import CATEGORIES
+SCHEMA["properties"]["items"]["items"]["required"].append("category")
+SCHEMA["properties"]["items"]["items"]["properties"]["category"] = {"type": "string", "enum": list(CATEGORIES)}
+
 SYSTEM = """You review insurance claims. You get the policy, the damage description and
 the line items of an invoice. For every line, judge as a claims expert would whether it is
 covered by the policy, related to the reported damage, and reasonably priced.
 All amounts are GROSS EUR (incl. 19% VAT) for the WHOLE line, i.e. quantity x unit price,
 never net and never per unit.
 Fields per line:
+- category: equipment, labour, material, accessory, ancillary or other.
 - covered_prob: probability (0-1) that the line is both covered and related to this damage.
 - t_if_covered: the highest total a claims expert would still accept for this line if it is
   covered, at usual German market rates. Always a realistic positive amount, even when

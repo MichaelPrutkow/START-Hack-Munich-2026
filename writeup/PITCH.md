@@ -50,7 +50,7 @@ We submit a complete fallback before model analysis, enforce tier budgets and a 
 
 **Can historical recall transfer the wrong coverage or price?**
 
-Recall requires the same policy and quantity, matching units, and similar descriptions. It presents historical policy-adjusted total intervals, never inferred market unit rates. Current damage relation and coverage must be assessed independently. August data is excluded.
+Recall requires the same policy and quantity, matching units, and similar descriptions. It presents historical policy-adjusted total intervals, never inferred market unit rates. Current damage relation and coverage must be assessed independently.
 
 **Which improvement have you proved?**
 

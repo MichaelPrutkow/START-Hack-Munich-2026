@@ -87,6 +87,24 @@ class PriceResearchTests(unittest.TestCase):
             row[0]['est']['fast']['1'].update(patch)
             self.assertFalse(P.scope(row[0]['est']['fast']['1']))
 
+    def test_compact_categories_reach_learning_without_cost_breakdowns(self):
+        from claim_to_fame import pricing, prompts
+        vote = {"covered_prob": 1, "t_if_covered": 100, "category": "equipment"}
+        estimate = pricing.estimate_votes([vote])
+        self.assertEqual(estimate["valuation_category"], "equipment")
+        mixed = pricing.estimate_votes([vote, {**vote, "category": "labour"}])
+        self.assertEqual(mixed["valuation_category"], "unknown")
+        legacy = pricing.estimate_votes([{"covered_prob": 1, "t_if_covered": 100}])
+        self.assertEqual(legacy["valuation_category"], "unknown")
+        invalid = pricing.estimate_votes([{**vote, "category": []}])
+        self.assertEqual(invalid["valuation_category"], "unknown")
+        for other in (legacy, mixed, invalid):
+            self.assertAlmostEqual(other["m"], 100)
+        self.assertNotIn("valuation", prompts.SCHEMA["properties"]["items"]["items"]["properties"])
+        rec = prepared(1)[0]
+        obs = P.observation(rec, 1, estimate, [90, 110], P.identity(rec, "fast"))
+        self.assertEqual(obs["category"], "equipment")
+
     def test_small_sample_or_harmful_later_data_cannot_promote(self):
         small = P.evaluate([prepared(i, m=50) for i in range(1, 5)], 'us')
         self.assertEqual(small['cohorts'][0]['status'], 'shadow')
