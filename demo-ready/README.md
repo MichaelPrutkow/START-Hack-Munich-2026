@@ -1,0 +1,316 @@
+# Claim to Fame runner (team chineseModels)
+
+QuantCo "Claim to Fame", START Hack Munich 2026. Shared context for people and agents: [AGENTS.md](AGENTS.md); decisions with evidence: [notes/DECISIONS.md](notes/DECISIONS.md).
+
+> **Only ONE machine plays (currently Philip's Mac).** Never start `runner.py` anywhere else, not even `--game`: a second runner overwrites our submissions.
+
+## Setup (once, macOS)
+
+```bash
+brew install uv sevenzip
+git clone https://github.com/MichaelPrutkow/START-Hack-Munich-2026.git
+cd START-Hack-Munich-2026
+uv sync
+cp .env.example .env
+mkdir -p cases
+```
+
+Then fill in `.env` (never commit or paste it): `TEAM_API_KEY=...`, `OPENAI_KEY_1=...` (more keys as `_2`, `_3`), no quotes. Copy all case zips from the Drive into `cases/` (any name, the game number must be in it, e.g. `case_007.zip`). Without 7-Zip the runner falls back to pyzipper.
+
+## Play
+
+```bash
+source .venv/bin/activate && python3 runner.py --check && caffeinate -i python3 runner.py
+```
+
+`--check` shows keys, models, the next game and missing zips. Games start every 800 s from 14:00:00 (14:13:20, 14:26:40, 14:40:00, ...), each with a 60 s window. Restart only between two windows. Logs: `out/runner.log`, submissions `out/submissions.jsonl`, rounds incl. estimates and tokens `out/rounds.jsonl`.
+
+## Each round
+
+Key at T+0 → decrypt → parse all invoice pages → complete provisional submission → fast and deep models in parallel → complete merged submission with echo check. Every line retains its source tier. The larger model wins ties when consistency is comparable; a substantially more disputed answer does not automatically replace a consistent one. After the deep answer, at most two expensive/disputed lines receive a focused two-vote recheck if at least eight seconds remain for inference. Its budget is twelve seconds and never extends the submission deadline. Shared-cap groups are updated together.
+
+Votes retain their median, amount spread, coverage dispersion and document-anchor disagreements. Disagreement no longer selects the two highest estimates. Baseline pricing remains `a = A_MULT × m`, with `b` at the existing `p · P(t ≥ b) = 2/3` threshold. Document amounts and individual/shared limits apply deterministically. The optional spread-based price adjustment is off until evaluated (`PRICING_UNCERTAINTY=0`). API-key handling is unchanged.
+
+## Analyse and test (read-only, safe on any machine)
+
+```bash
+uv run calibrate.py --team chineseModels
+```
+```bash
+uv run python test_runner.py
+```
+```bash
+uv run watch.py --team chineseModels
+```
+```bash
+uv run eval_cases.py --games 1 2 3 4 5 --tiers deep fast --deep-votes 3 --old-ref 10ad63b --holdout-from 4
+```
+
+`watch.py` reports every finished game from the leaderboard (net, rank, our a against the t interval, no LLM) and raises a macOS alarm if we apparently did not submit.
+
+`eval_cases.py` requires `--old-ref <commit>` or `--skip-old`. It scores actual returned prices, including document values and caps, and prints conservative payoff bounds. Their midpoint is not expected profit. Historical code/lazy imports are isolated and model/vote budgets match. Failed or incomplete comparisons are excluded. This single-tier replay does not simulate live timing or merged tiers. It submits nothing and waits outside game windows, but spends OpenAI tokens. Choose the holdout boundary before inspecting results; reusing already-tuned games is descriptive, not independent validation.
+
+`calibrate.py` fetches each completed game once (1 request/s, cached in `out/leaderboard/`), derives censored fair-price intervals and supports `--holdout-from <game>` for parameter comparisons. Accepted payments are not assumed to equal original demands when a payment cap could have applied.
+
+## Browser dashboard
+
+For the presentation, run `./demo.sh` and open http://127.0.0.1:8765. Use `--game 42` to reconstruct learning from games 1–41 and replay game 42, or `--replay` to start game 1 empty and accumulate earlier evidence across games 1–100. `--check` validates the private handover without API calls. Replay results and hypothetical payoff bounds appear separately from actual competition results. This uses paid model calls and requires local decrypted cases; it never submits competition prices. See [the demo guide](writeup/DEMO.md) for prerequisites, offline rehearsal, resuming and the pitch sequence.
+
+```bash
+uv run python -m dashboard.server
+```
+
+Open [the local dashboard](http://127.0.0.1:8765/). The dashboard checks for completed games once a minute and uses already downloaded rounds from `out/leaderboard/`. It caches newly fetched public transactions in `out/dashboard/public/`. It runs independently of the submitting runner and can also be used on a second team machine. On that machine, the public results are available and the local `out/rounds.jsonl` details appear only if the team has the relevant log there.
+
+Select your team, a round and an invoice position. The transaction list shows both sides of each matchup, payment, acceptance outcome and price bounds. The threshold `t` is shown as a range supported by the settled payments. The lower bound is inclusive and an available upper bound is exclusive. Local historical prices without a verified final submission are labelled as such.
+
+For a simulation, change `a`, `b`, or both for a position. The hypothetical result is an interval against the same opponents and is compared with the actual net result. Automatic suggestions appear when one of the tested historical changes improves even the lower bound. They are retrospective scenarios and the dashboard uses no team API or OpenAI keys.
+
+Add `--offline` to use only cached data, `--port 8766` to change the local port, or `--team NAME` to use a different team for the public data fetch and local runner log. To export a JSON report for completed games after game 7, run `uv run python -m dashboard.server --report --after 7`. Add `--offline` for an export from existing cached rounds.
+
+## Learning between rounds
+
+The scheduled runner now starts one background learner automatically (`LEARNING_AUTO=1`, `TEAM_NAME=chineseModels`). It uses only public leaderboard GETs and local round logs, with no model calls. It pauses before the next game window, retries delayed publication, and resumes partially downloaded pages. Dry runs, one-off games and `--check` do not start the learner. **Only Philip's Mac runs the submitting runner.**
+
+Completed settlements are checked for full pagination and ordered team pairs, then compared with public per-game matrix results wherever those cells are available (two-cent tolerance). Mismatches are quarantined; unavailable matrix cells are explicitly marked. The learner atomically publishes `out/learning.json`, `out/learning-report.md` and refresh diagnostics in `out/learning-status.json`. The runner reads the artifact at the next game. Network failures or an incomplete rebuild retain the prior artifact.
+
+Inspect active/shadow parameters and why promotion is blocked, without network or LLM requests:
+
+```bash
+uv run learn.py --status
+```
+
+The optional watcher still supplies alerts (`uv run watch.py --team chineseModels`). Its `--learn` flag rebuilds from cached data under the same process lock; it is no longer required for automatic learning. A watcher on another machine needs Philip's round logs to learn from our estimates.
+
+Rebuild from cached data without network or LLM requests:
+
+```bash
+uv run learn.py --team chineseModels
+```
+
+`--refresh` explicitly fetches missing completed public games represented in the local logs, using the same bounded refresh and cache locks. `--before-game N` excludes game N and later data. The report separates reviewer overpayment, wrongful-rejection penalties and bounded issuer opportunity losses, grouped by round and actual source tier. It also shows opponents' acceptance of known-unfair positive claims and rejection of known-fair claims; unknown fairness remains separate.
+
+Calibration fits price bias and an initial spread from censored earlier-round intervals, then chooses `A_MULT` (0.50–1.05) and `SIGMA` (0.30–1.40, plus the fitted spread) against the field using only training-round conservative net. It stays in shadow until there are at least six games, sixteen confirmed-covered training lines and eight later validation lines. Validation includes all otherwise eligible high-coverage predictions, including coverage mistakes. A frozen candidate must improve the held-out conservative net lower bound by at least 5% over actual baseline net. Replacing an active calibration also requires a 5% improvement over that incumbent's upper bound on the same holdout. Rebuilding unchanged evidence does not renew the validation date.
+
+Validation and live application require matching model/prompt/estimator identities. When a target cohort lacks training observations, older estimates with missing version identifiers may supply a historical training pool: their recorded predictions and pricing parameters must reproduce verified submissions, and every borrowed game must precede the first target-cohort game. Versions are never invented. Historical rows cannot serve as holdout; the frozen proposal still needs eight eligible positions across at least two later games of the target estimator, sixteen covered training positions and six games overall. Training may therefore start immediately from old logs while activation waits for enough current validation evidence.
+
+Changing the price defaults, log messages, or an unrelated model tier no longer resets another tier's history. Calibrated observations may be reused only when the recorded raw estimate and applied parameters reproduce the actual submission; bias is never compounded. Capped, stated-amount and experimental uncertainty-adjusted lines remain outside parameter fitting/application. Stale, malformed, future-game or unreconciled data are ignored. `learn.py --status` now shows historical training counts, actual train/holdout game IDs and exclusion reasons, alongside proposed/active parameters. Artifact schema 3 is rebuilt automatically from the existing logs and caches.
+
+Recall supplies whole-line fair-price **ranges** from our own completed rounds. Numerical corrections require matching policy, quantity and unit; broader comparisons are labelled as hypotheses and cannot establish current coverage or price bounds. It is not a market unit-rate lookup and never copies old coverage into a new case. Old successful logs may recover a complete explicitly recorded winning tier, subject to settlement reconciliation. Partial or ambiguous submissions stay excluded. Missing model/prompt identities remain visible in the historical training provenance. Public payments alone are never converted into invented internal model estimates.
+
+Michael's per-game `.env` refresh and `view_rounds.py` are retained. Manual changes to `A_MULT`, `SIGMA`, `DISAGREE` and `AUTO_TUNE` take effect before the next scheduled round without restarting. `AUTO_TUNE=0` pins manual price defaults; `LEARNING_AUTO=0` independently disables the background downloader. The older `tune.py` remains an exploratory analysis tool: it imputes unknown prices and selects and compares settings on the same data. Its `out/params.json` proposals no longer bypass validation or compete with `learning.json` for live prices. The wider field-search ranges are integrated into the single validated learner above. Its replay now scores every setting with `calibrate.score_submission` bounds (unknown limits, fairness and the payment cap stay ranges) and checks the step it would propose itself: midpoint gain, worst case not lower, 2 of 3 periods, still a gain without the best game.
+
+**Recall caps (`claim_to_fame/recall.py`, `RECALL_CAP`).** Cases repeat with the identical policy text and reworded invoices (games 1/9/15, 2/6, 3/11/14, 8/10/13). Before pricing, the runner looks up lines of earlier games with the same policy text and a similar description (word overlap ≥ 0.3, quantity-scaled for equal units) in the local `out/cases/` and `out/leaderboard/` files. `RECALL_CAP=2` (default since 21.11. 18:45) caps both `a` and `b` at 0.95 × the lowest recalled unfair level (`cap_hi`), whether or not a fair level is known; neither is ever raised (replay G1–18 with A_MULT 0.68: +4.9k over no recall, positive in G1–10 and G11–18; the old midpoint cap on `a` alone: +0.3k). `1` keeps the old two-sided midpoint cap on `a`, `loose` adds the one-sided one, `shadow` only logs `recall` in the round record and `recall_cap`/`recall_cap_hi` per line, `0` is off. The mode is read from `.env` every game. Capped lines no longer reproduce the logged pricing parameters and therefore drop out of parameter fitting.
+
+
+**Shadow variants (logged, never sent).** Every round record carries `commit`, `confirmed` (stages the server echoed) and `shadow`: the final submission with `a` × 0.80 on all LLM lines (`a80_all`), `a` × 0.80 only on quantity-1 lines without a document amount (`a80_uncertain`) and `b ≤ 0.80 a` (`b_le_80pct_a`). Defined before game 15 from the external review; `uv run tune.py --shadow` scores them against what was actually sent once those games are settled. Decide after 3–5 games, and once without the best game.
+
+New raw votes, actual submitted prices, per-line sources and model/prompt/configuration/learning provenance remain in ignored `out/`. Implementation tests do not establish a live profit improvement. Current shared-cap schema identifies groups by amount; distinct clauses with equal numeric limits remain a known limitation.
+
+## Applying this update
+
+Pull the update and restart **only Philip's runner**, between game windows. API-key code is unchanged. Keep the previous checkout available for rollback. Learning starts automatically; `LEARNING_AUTO=0` disables background refresh. `FOCUS_ENABLED=0` disables the optional follow-up call; keep `PRICING_UNCERTAINTY=0` until a chronological comparison supports enabling it. This update never overwrites `.env`.
+
+The briefing audit, implemented gaps and remaining experiments are documented in [`notes/BRIEFING_ALIGNMENT.md`](notes/BRIEFING_ALIGNMENT.md). Official tournament rules take precedence over historical material.
+
+The one-page submission text and three-minute pitch with Q&A are in [`writeup/ONE_PAGE.md`](writeup/ONE_PAGE.md) and [`writeup/PITCH.md`](writeup/PITCH.md). Their game-8 numbers are a dated snapshot, not final standings.
+
+If Deep frequently finishes late, a latency-first trial is `DEEP_REASONING=medium` and `DEEP_VOTES=1`. Keep one assignment per key in `.env`. The model tier configuration loads at process start, so restart the existing runner between game windows. A single vote reduces work and also removes Deep's cross-vote consensus. Watch the per-tier arrival time and vote count. Failed assessments log a sanitized reason, budget, elapsed time and known HTTP status in `out/runner.log` and `out/rounds.jsonl` (`llm_failures`). Bundled and single-vote fallbacks share one deadline.
+
+## Code layout
+
+| Path | Responsibility |
+| --- | --- |
+| `runner.py` | CLI, environment, logging, game API, decryption, OpenAI keys, concurrent tiers and round scheduling. Existing imports such as `runner.price` remain available. |
+| `claim_to_fame/invoices.py` | Invoice table/text parsing, wrapped descriptions, units and rule-based fallback values. |
+| `claim_to_fame/prompts.py` | System prompt, structured response schema and policy amount extraction. Edit prompt wording here. |
+| `claim_to_fame/pricing.py` | Vote aggregation, pro-rata shared caps, rounding and the a/b rule. Parameters are explicit; the runner forwards its current settings. |
+| `calibrate.py` | Read-only leaderboard analysis and calibration. |
+| `watch.py` | Read-only per-game reports and missing-submission alarms. |
+| `view_rounds.py` | Read-only view of `out/rounds.jsonl`: per line and tier the votes, p, m, a, b, clause, line source and (if cached) the true t interval. |
+| `eval_cases.py` | Historical/current LLM comparison on finished cases. |
+| `claim_to_fame/feedback.py`, `learn.py` | Settlement reconciliation, loss bounds, calibration, contextual recall and private artifacts. |
+| `claim_to_fame/learning_service.py`, `legacy.py` | Bounded background refresh and strict recovery of old complete submission logs. |
+| `claim_to_fame/tuning.py`, `tune.py` | Exploratory historical field replay; proposals are not applied by the runner. |
+| `claim_to_fame/price_memory.py`, `price_research.py` | Comparable-item and category learning from own reconciled rounds, with chronological validation. |
+| `research_prices.py` | Opt-in paired reassessment of completed local cases; planning makes no model calls. |
+| `tests/` | Offline domain, round orchestration and historical-import regression tests. |
+| `test_runner.py` | Runs the entire offline suite using Python's standard-library `unittest`. |
+
+Run `uv run python test_runner.py` after changes. The optional real-PDF test is skipped when `out/cases/case_000/invoices.pdf` is absent; other tests use synthetic data and fake API/LLM responses. No new dependencies are required.
+
+## Integrating a teammate's next push
+
+Commit the local work first, then run `git fetch origin` and inspect `git log --oneline HEAD..origin/main` and `git diff HEAD...origin/main`. Merge the remote branch with `git merge origin/main`, resolve any conflicts, and rerun `uv run python test_runner.py`. Changes to previously extracted blocks in `runner.py` belong in the corresponding module above. Review the resulting diff before pushing. Update `AGENTS.md` with the integration status.
+
+For a one-step pull with the same merge strategy, use `git pull --no-rebase`. This keeps local and remote commits and avoids the divergent-branches preference prompt.
+
+
+### Independent control and decision review
+
+`CONTROL_SHADOW=1` (default) evaluates up to two economically important, non-shared-cap
+positions after **all production tier/focus workers have finished** and a model submission
+has been confirmed. It uses one vote from the lowest-level configured tier. The request
+contains the original policy, damage description and selected invoice items, but no prior
+estimates or historical price context. This is an independent context check, not a claim
+that the model's errors are statistically independent. Shared caps discovered in the
+control are excluded because a subset cannot allocate a whole-case limit safely.
+
+The control never calls the submission function, never replaces an estimate, and never
+activates calibration. It has at most eight seconds, reserves three seconds before the
+runner deadline, and is skipped when fewer than four seconds remain. It adds model cost
+when it runs; `CONTROL_SHADOW=0` disables it. Existing focus and production stages retain
+priority. Raw results, status, token usage and duration are private in `rounds.jsonl`
+(`control_shadow` and `usage.control`). No second process is needed.
+
+The automatic between-round learner adds the following to `out/learning-report.md`:
+
+- Raw amount estimates relative to public fair-price intervals, separate from submitted prices.
+  An amount conditional on coverage is not called a pricing error when positive coverage
+  has not been demonstrated. These diagnostics identify discrepancies, not their cause.
+- `independent_control_a`, `_b`, `_both`: bounded changes in net if only the named decision
+  were replaced by the recorded control price; the other role keeps its actual cashflow.
+- `without_recall_a`, `_b`, `_both`: bounded changes if recorded recall caps were removed.
+  A positive value here favors **removing** the cap; a negative value favors retaining it.
+- Per-game effects, total bounds, and the lower bound excluding the best game; recent
+  commit/status history and the five worst positions in the last five reconciled rounds.
+
+`uv run learn.py --status` shows the control statuses and comparisons without model calls
+or network requests. Historical logs without a control remain usable; no control is invented.
+Comparisons cover selected positions only, keep opponents fixed, and are not independent
+holdout validation or expected profit. No report automatically changes parameters.
+Keep Michael's prompt-v3 pricing configuration; this update does not change `.env`,
+`A_MULT`, `SIGMA`, or automatic calibration gates. On Philip's machine stop the existing
+runner between rounds **before pulling**, then restart exactly one instance.
+
+### Parametervergleich nach jeder abgeschlossenen Runde
+
+Die automatische Lernschleife berechnet außerhalb des Spielfensters einen rückblickenden
+Vergleich für die letzten zwanzig vollständig gecachten Spiele. `LEARNING_AUTO` muss aktiviert
+sein; `AUTO_TUNE=0` verhindert diese Auswertung nicht. Keine zusätzlichen LLM-Aufrufe.
+Das Raster enthält A_MULT 0,50–1,10 und SIGMA 0,20–1,40, jeweils in
+0,01-Schritten (7.381 Kombinationen),
+zusätzlich tatsächlich verwendete Paare. Nach Veröffentlichung der Abrechnung wird es
+beim nächsten erfolgreichen automatischen Refresh aktualisiert; bei Zeitmangel bleibt
+der vorige Bericht erhalten.
+
+`uv run learn.py --status` zeigt die besten Kombinationen und den Sieger je Spiel.
+`out/learning-report.md` enthält die Übersicht; `out/learning.json` unter
+`parameter_grid.ranking` alle Kombinationen mit Gesamtergebnissen. Einzelrundendetails
+werden für die Top 10 gespeichert, außerdem bleibt der Sieger je Einzelspiel in
+`parameter_grid.per_game` erhalten. So bleibt die Lerndatei auch beim feinen Raster klein.
+Ein sofortiger Offline-Neuaufbau aus vorhandenen Logs und Cache ist mit
+`uv run learn.py` möglich (ohne `--refresh`, keine neuen Modellaufrufe).
+
+Verglichen werden die ursprünglichen gespeicherten Schätzungen und Deckungswahrscheinlichkeiten,
+nicht aus alten Forderungen zurückgerechnete Preise. Bias, Police-Limits und damaliger Recall
+bleiben erhalten. Erst muss der ursprüngliche Preis exakt reproduzierbar sein; andernfalls
+bleibt die Position für alle Kombinationen unverändert und wird als Ausschluss ausgewiesen.
+Fehlende jüngere Spiele werden nicht durch ältere ersetzt. Die Rangfolge nutzt die konservative
+Gewinnuntergrenze; überlappende Spannen und Gleichstände belegen keinen eindeutigen Sieger.
+Der Vergleich ohne die beste Runde zeigt Konzentration auf einzelne Gewinne. Verschiedene
+Modell-/Promptstände können im Fenster enthalten sein. Dies ist eine rückblickende Auswertung
+bei unveränderten Gegnerabgaben, keine unabhängige Prognose und keine automatische
+Änderung von A_MULT oder SIGMA. Der vorhandene validierte Kalibrierungsweg bleibt separat.
+
+### Rechenzeit zwischen den Runden: Preis-Schätzervergleich für m
+
+Jeder erfolgreiche Lern-Neuaufbau untersucht zusätzlich unter `m_research` acht Verfahren:
+die tatsächlich gewählte Schätzung, Fast, Deep, Focus, Max, Median und geometrisches Mittel
+verfügbarer Modellstufen sowie den 50/50-Mittelwert von Fast/Deep. Für jedes Verfahren werden
+m-Faktoren 0,50 bis 1,50 in 0,01-Schritten gerechnet: 808 Kandidaten über die letzten bis zu
+20 vollständigen Cache-Spiele. Focus und Deep zählen im stufenübergreifenden Ensemble nicht
+doppelt, identische bekannte Modellnamen werden dort ebenfalls nur einmal verwendet.
+
+Die Berechnung verwendet originale gespeicherte Schätzungen. Deckungswahrscheinlichkeit,
+A_MULT, SIGMA, Bias und damaliger Recall bleiben für einen gepaarten Vergleich gleich.
+Alternative Schätzungen werden nur bei ähnlicher Deckungswahrscheinlichkeit (Differenz
+höchstens 0,10) und identischen Zeilenlimits verglichen. Dokumentbeträge und gemeinsame
+Limit-Allokationen werden nicht verändert. Fehlende/unpassende Stufen lassen die betreffende
+Position unverändert; die unterschiedliche Datenabdeckung steht im Bericht. Das ist ein
+Vergleich der bedingten Preise, nicht einer kompletten alternativen Modellstrategie.
+
+Der automatische Lernbericht und `uv run learn.py --status` zeigen Top 10, Gewinnspannen,
+Veränderung gegenüber tatsächlichen Zahlungen und Ergebnis ohne die stärkste Runde.
+`m_research.walk_forward` wählt nach mindestens fünf früheren auswertbaren Spielen den
+Kandidaten und prüft ihn erst im nächsten Spiel. Ein Schätzer benötigt dafür Daten aus
+mindestens drei früheren Spielen. Die separat gespeicherten `fixed_candidate_test_scores`
+sind beschreibende Vergleiche auf denselben späteren Spielen; ihre nachträglich beste Zeile
+ist kein unabhängig validierter Gewinner.
+
+Der Runner startet diese Forschung automatisch über den bestehenden Lernservice. Kein
+zusätzlicher dauerhaft laufender Prozess, keine zusätzlichen Modellanfragen, keine Abgaben
+und keine automatische Übernahme dieser Forschungskandidaten. Eine frühere erfolgreiche
+Auswertung wird bei identischem Fingerabdruck von Daten und Rechenlogik wiederverwendet.
+Deadline-Prüfungen halten Spielfenster und Refresh-Budget ein; bei Abbruch bleibt das letzte
+vollständige Lernartefakt erhalten. Mehr Rechenzeit beseitigt weder fehlende Daten noch
+Ungewissheit über versteckte faire Preise. Neue Prompts/Modelle können die Übertragbarkeit
+historischer Resultate einschränken. Zusätzliche API-Neubewertungen alter Fälle bleiben ein
+separates, ausdrücklich gestartetes Experiment (`eval_cases.py`).
+
+## Gleiche und ähnliche Positionen im Preisgedächtnis
+
+`price_memory.py` sucht in bis zu 5.000 belegten November-Positionen. Vollständige
+Beschreibungen werden normalisiert und über gemeinsame Leistungsbegriffe verglichen;
+ein kleiner expliziter Synonymbestand unterstützt Umformulierungen. Es ist eine lokale
+Textsuche, kein allgemeines semantisches Modell. Andere Zahlen/Maße, widersprüchliche
+Tätigkeiten, Qualität oder Verneinungen werden nicht als gleiche Leistung behandelt.
+Je Position gibt es bis zu drei Beispiele, bevorzugt aus verschiedenen Spielen. Das
+Prompt-Budget von 10.000 Zeichen wird reihum verteilt: erst ein Beispiel je Position,
+dann weitere. Bei sehr langen Rechnungen können trotzdem Beispiele entfallen.
+
+Die Beispiele enthalten Herkunft, Mengen, Einheiten, Policenbezug und Preisintervalle.
+Andere Policen sind nur Vergleichshinweise; bekannte limitierte Positionen werden dabei
+ausgeschlossen. Mengenanpassung ist nur bei linearen Einheiten und einer protokollierten
+vollständigen Erstattung ohne Limits als **Vergleichshypothese** zugelassen. Sie erzeugt
+keine bewiesene aktuelle Preisgrenze und keinen vermeintlichen Marktpreis pro Einheit.
+Deckung und Schadenbezug beurteilt das Modell weiterhin anhand des aktuellen Falls.
+
+`price_research.py` prüft zwei getrennte Korrekturwege automatisch nach abgeschlossenen
+Runden. Die Erinnerung benötigt gleiche Police/Menge, hohe Textähnlichkeit, mindestens
+zwei verschiedene Vorgängerspiele und überlappende, relativ enge zweiseitige Spannen.
+Sie kann zu hohe und zu niedrige Schätzungen korrigieren; keine Intervallmitte wird als
+Wahrheit eingesetzt. Kategorien werden getrennt je Modell/Prompt/Konfiguration aus
+mindestens acht Beobachtungen in drei Spielen angepasst. Der Fit minimiert Fehler zu
+Intervallen und schrumpft kleine Datensätze zum Faktor 1. Beide Wege sind auf Änderungen
+von höchstens 25 % begrenzt und werden nicht miteinander multipliziert.
+
+Jede historische Prüfung nutzt nur frühere Spiele. Freigabe je Modellkennung und
+Korrekturweg (bei Kategorien zusätzlich je Kategorie): mindestens acht geänderte Zeilen
+in drei späteren Spielen, konservativer Vorteil mindestens 5 % des absoluten
+Baseline-Netto-Maßstabs und positiver Vorteil auch ohne die beste Einzelrunde.
+Unbekannte Auszahlungen bleiben Grenzen. Das ist retrospektive Evidenz gegen unveränderte
+Gegner, keine Garantie künftiger Gewinne. Neue Modell-/Promptkennungen brauchen eigene
+Belege. `PRICE_LEARNING=validated` ist der Standard, `shadow` protokolliert Vorschläge,
+`off` deaktiviert die numerische Anwendung. Der Schalter ist unabhängig von `AUTO_TUNE`,
+das weiterhin nur A_MULT/SIGMA/Bias steuert. Bereits kalibrierte Positionen werden nicht
+doppelt korrigiert. Dokumentbeträge, Limits und geteilte Grenzen haben Vorrang. Original-m, korrigiertes m und Belegspiele werden geloggt.
+
+Nach dem üblichen Pull/Neustart auf dem einzigen Runner genügt der automatische Refresh;
+`uv run learn.py --status` zeigt Freigaben und Vergleichsergebnisse. Ein Offline-Neuaufbau
+aus den vorhandenen privaten Logs erfolgt mit `uv run learn.py`. Die Lernbasis besteht ausschließlich aus den eigenen abgeschlossenen Runden.
+
+## Begrenzte Neubewertung abgeschlossener Fälle
+
+`research_prices.py` vergleicht Komponentenprüfung und historische Vergleichsbeispiele
+mit demselben Modell und einer Stimme. Es braucht bereits entschlüsselte lokale Fälle,
+vollständige lokale Abrechnungen und echte Rundenlogs. Keine Schlüsselabfrage, keine
+Abgabe, keine automatische Änderung des Produktionsprompts. Beispiel mit **bereits
+abgeschlossenen** Spielen; die Trennung vor dem Experiment festlegen:
+
+```bash
+uv run research_prices.py --games 30 31 32 33 34 35 --holdout-from 33
+uv run research_prices.py --games 30 31 32 33 34 35 --holdout-from 33 --run
+```
+
+Ohne `--run` wird nur der Plan ausgegeben. Mit `--run` entstehen Modellkosten: maximal
+zwölf Bewertungen und 180 Sekunden insgesamt als Standard; die Aufrufe stoppen vor
+dem nächsten Spielfenster. p, Preisparameter, ursprünglicher Recall und Gegner bleiben
+fest; inkompatible Deckungs-/Limit-Schätzungen verändern die betreffende Zeile nicht.
+Ausfälle und fehlende Antworten bleiben sichtbar. Nur beidseitig erfolgreiche Spiele
+gehen in den gepaarten Vergleich ein, Training und Prüfspiele werden getrennt berichtet.
+Ergebnisse liegen privat in `out/price-experiments.json`. Prüfspiele nicht zur Auswahl
+neuer Promptregeln verwenden. Wiederholte Experimente auf denselben Fällen sind keine
+unabhängige Bestätigung.
+
+Live-Bewertungen verwenden ein kompaktes Kategoriefeld statt einer ausführlichen Kostenaufstellung. Die Kategorie braucht eine Stimmenmehrheit; fehlende oder widersprüchliche Kategorien bleiben unbekannt.
